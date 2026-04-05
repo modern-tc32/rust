@@ -1,0 +1,271 @@
+name: Build TC32 Rust Host Toolchain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - ".github/workflows/build-tc32-host.yml"
+      - "compiler/**"
+      - "library/**"
+      - "src/**"
+      - "x.py"
+  pull_request:
+    paths:
+      - ".github/workflows/build-tc32-host.yml"
+      - "compiler/**"
+      - "library/**"
+      - "src/**"
+      - "x.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tc32-rust-host-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUILD_TYPE: Release
+  LLVM_ENABLE_PROJECTS: clang;lld
+  LLVM_TARGETS_TO_BUILD: X86;AArch64;ARM
+
+jobs:
+  build-host:
+    name: ${{ matrix.host }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-amd64
+            runs_on: ubuntu-latest
+            host_triple: x86_64-unknown-linux-gnu
+            is_windows: false
+          - host: macos-arm64
+            runs_on: macos-14
+            host_triple: aarch64-apple-darwin
+            is_windows: false
+          - host: windows-amd64
+            runs_on: windows-latest
+            host_triple: x86_64-pc-windows-msvc
+            is_windows: true
+
+    steps:
+      - name: Checkout Rust
+        uses: actions/checkout@v5
+
+      - name: Checkout TC32 LLVM
+        uses: actions/checkout@v5
+        with:
+          repository: modern-tc32/llvm-project
+          ref: tc32-as-thumb-extension
+          path: llvm-project-ext
+          fetch-depth: 1
+
+      - name: Enable MSVC environment
+        if: matrix.is_windows
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake python3 git
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+
+      - name: Show tool versions (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          cmake --version
+          ninja --version
+          git --version
+
+      - name: Show tool versions (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          python --version
+          cmake --version
+          ninja --version
+          git --version
+
+      - name: Init cargo submodule (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 src/tools/cargo
+
+      - name: Init cargo submodule (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          git submodule update --init --depth 1 src/tools/cargo
+
+      - name: Configure LLVM (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/${{ matrix.host }}/llvm"
+          cmake -S "$GITHUB_WORKSPACE/llvm-project-ext/llvm" -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DLLVM_ENABLE_PROJECTS="$LLVM_ENABLE_PROJECTS" \
+            -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS_TO_BUILD" \
+            -DLLVM_INCLUDE_TESTS=ON \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_BUILD_TESTS=OFF \
+            -DLLVM_BUILD_BENCHMARKS=OFF \
+            -DLLVM_BUILD_EXAMPLES=OFF \
+            -DLLVM_BUILD_DOCS=OFF \
+            -DCLANG_INCLUDE_TESTS=OFF
+
+      - name: Configure LLVM (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host }}/llvm"
+          cmake -S (Join-Path $env:GITHUB_WORKSPACE "llvm-project-ext/llvm") -B $buildDir -G Ninja `
+            "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE" `
+            "-DLLVM_ENABLE_PROJECTS=$env:LLVM_ENABLE_PROJECTS" `
+            "-DLLVM_TARGETS_TO_BUILD=$env:LLVM_TARGETS_TO_BUILD" `
+            "-DLLVM_INCLUDE_TESTS=ON" `
+            "-DLLVM_INCLUDE_BENCHMARKS=OFF" `
+            "-DLLVM_INCLUDE_EXAMPLES=OFF" `
+            "-DLLVM_BUILD_TESTS=OFF" `
+            "-DLLVM_BUILD_BENCHMARKS=OFF" `
+            "-DLLVM_BUILD_EXAMPLES=OFF" `
+            "-DLLVM_BUILD_DOCS=OFF" `
+            "-DCLANG_INCLUDE_TESTS=OFF"
+
+      - name: Build LLVM tools (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR="$GITHUB_WORKSPACE/build/${{ matrix.host }}/llvm"
+          cmake --build "$BUILD_DIR" --parallel --target llvm-config FileCheck clang llc llvm-objdump lld
+
+      - name: Build LLVM tools (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host }}/llvm"
+          cmake --build $buildDir --parallel --target llvm-config FileCheck clang llc llvm-objdump lld
+
+      - name: Write bootstrap.toml (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_BIN="$GITHUB_WORKSPACE/build/${{ matrix.host }}/llvm/bin"
+          cat > "$GITHUB_WORKSPACE/bootstrap.toml" <<EOF
+          change-id = "ignore"
+
+          [llvm]
+          download-ci-llvm = false
+
+          [build]
+          build = "${{ matrix.host_triple }}"
+          host = ["${{ matrix.host_triple }}"]
+          target = ["${{ matrix.host_triple }}", "tc32-unknown-none-elf"]
+
+          [rust]
+          download-rustc = false
+          llvm-tools = false
+
+          [target.${{ matrix.host_triple }}]
+          llvm-config = "$LLVM_BIN/llvm-config"
+          llvm-filecheck = "$LLVM_BIN/FileCheck"
+          llvm-has-rust-patches = false
+          EOF
+
+      - name: Write bootstrap.toml (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $llvmBin = (Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host }}/llvm/bin") -replace '\\','/'
+          $content = @"
+          change-id = "ignore"
+
+          [llvm]
+          download-ci-llvm = false
+
+          [build]
+          build = "${{ matrix.host_triple }}"
+          host = ["${{ matrix.host_triple }}"]
+          target = ["${{ matrix.host_triple }}", "tc32-unknown-none-elf"]
+
+          [rust]
+          download-rustc = false
+          llvm-tools = false
+
+          [target.${{ matrix.host_triple }}]
+          llvm-config = "$llvmBin/llvm-config.exe"
+          llvm-filecheck = "$llvmBin/FileCheck.exe"
+          llvm-has-rust-patches = false
+          "@
+          Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE "bootstrap.toml") -Value $content
+
+      - name: Build stage1 Rust host toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 x.py build --stage 1 compiler/rustc src/tools/cargo
+
+      - name: Build stage1 Rust host toolchain (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          python x.py build --stage 1 compiler/rustc src/tools/cargo
+
+      - name: Verify stage1 rustc (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE1="$GITHUB_WORKSPACE/build/${{ matrix.host_triple }}/stage1/bin/rustc"
+          "$STAGE1" --version
+          "$STAGE1" --print target-list | grep -Fx tc32-unknown-none-elf
+          "$STAGE1" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
+
+      - name: Verify stage1 rustc (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $stage1 = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host_triple }}/stage1/bin/rustc.exe"
+          & $stage1 --version
+          $targets = & $stage1 --print target-list
+          if (-not ($targets | Select-String -Pattern '^tc32-unknown-none-elf$')) {
+            throw "tc32-unknown-none-elf target is missing"
+          }
+          $cfg = & $stage1 --print cfg --target tc32-unknown-none-elf
+          if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
+            throw "tc32 target_arch cfg is missing"
+          }
+
+      - name: Upload stage1 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-host-${{ matrix.host }}
+          if-no-files-found: error
+          path: |
+            build/${{ matrix.host_triple }}/stage1/bin/rustc*
+            build/${{ matrix.host_triple }}/stage1-tools-bin/cargo*
+            bootstrap.toml
