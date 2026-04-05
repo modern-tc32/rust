@@ -3,7 +3,7 @@ name: Build TC32 Rust Host Toolchain
 on:
   workflow_dispatch:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "tc32"]
     paths:
       - ".github/workflows/build-tc32-host.yml"
       - "compiler/**"
