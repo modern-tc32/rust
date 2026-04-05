@@ -136,7 +136,7 @@ jobs:
       - name: Download LLVM artifact
         uses: actions/download-artifact@v4
         with:
-          name: tc32-llvm-toolchain-${{ matrix.host }}
+          name: tc32-llvm-rust-llvm-${{ matrix.host }}
           repository: ${{ env.LLVM_REPOSITORY }}
           run-id: ${{ needs.resolve-llvm-run.outputs.run_id }}
           github-token: ${{ secrets.LLVM_REPO_READ_TOKEN }}
@@ -148,14 +148,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/llvm-toolchain"
-          tar -xzf "$GITHUB_WORKSPACE/llvm-artifact/tc32-llvm-toolchain-${{ matrix.host }}.tar.gz" \
+          tar -xzf "$GITHUB_WORKSPACE/llvm-artifact/tc32-llvm-rust-llvm-${{ matrix.host }}.tar.gz" \
             -C "$GITHUB_WORKSPACE/llvm-toolchain"
 
       - name: Unpack LLVM artifact (Windows)
         if: matrix.is_windows
         shell: pwsh
         run: |
-          $archive = Join-Path $env:GITHUB_WORKSPACE "llvm-artifact/tc32-llvm-toolchain-${{ matrix.host }}.zip"
+          $archive = Join-Path $env:GITHUB_WORKSPACE "llvm-artifact/tc32-llvm-rust-llvm-${{ matrix.host }}.zip"
           $dest = Join-Path $env:GITHUB_WORKSPACE "llvm-toolchain"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Expand-Archive -Path $archive -DestinationPath $dest -Force
