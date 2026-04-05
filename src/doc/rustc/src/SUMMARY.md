@@ -93,6 +93,7 @@
     - [illumos](platform-support/illumos.md)
     - [loongarch\*-unknown-linux-\*](platform-support/loongarch-linux.md)
     - [loongarch\*-unknown-none\*](platform-support/loongarch-none.md)
+    - [tc32-unknown-none-elf](platform-support/tc32-unknown-none-elf.md)
     - [\*-lynxos178-\*](platform-support/lynxos178.md)
     - [m68k-unknown-linux-gnu](platform-support/m68k-unknown-linux-gnu.md)
     - [m68k-unknown-none-elf](platform-support/m68k-unknown-none-elf.md)

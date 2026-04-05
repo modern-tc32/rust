@@ -435,6 +435,7 @@ target | std | host | notes
 [`thumbv8m.main-nuttx-eabi`](platform-support/nuttx.md) | ✓ |  | ARMv8M Mainline with NuttX
 [`thumbv8m.main-nuttx-eabihf`](platform-support/nuttx.md) | ✓ |  | ARMv8M Mainline with NuttX, hardfloat
 [`thumbv8r-none-eabihf`](platform-support/armv8r-none-eabihf.md) | * |  | Thumb-mode Bare Armv8-R, hardfloat
+[`tc32-unknown-none-elf`](platform-support/tc32-unknown-none-elf.md) | * |  | Bare-metal Telink TC32
 [`wasm64-unknown-unknown`](platform-support/wasm64-unknown-unknown.md) | ? |  | WebAssembly
 [`wasm32-wali-linux-musl`](platform-support/wasm32-wali-linux.md) | ? |  | WebAssembly with [WALI](https://github.com/arjunr2/WALI)
 [`wasm32-wasip3`](platform-support/wasm32-wasip3.md) | ✓ |  | WebAssembly with WASIp3

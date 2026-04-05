@@ -50,11 +50,13 @@ impl AbiMap {
         let arch = match target.arch {
             Arch::AArch64 => ArchKind::Aarch64,
             Arch::AmdGpu => ArchKind::Amdgpu,
-            Arch::Arm => ArchKind::Arm(if target.llvm_target.starts_with("thumbv8m") {
-                ArmVer::ThumbV8M
-            } else {
-                ArmVer::Other
-            }),
+            Arch::Arm | Arch::Tc32 => {
+                ArchKind::Arm(if target.llvm_target.starts_with("thumbv8m") {
+                    ArmVer::ThumbV8M
+                } else {
+                    ArmVer::Other
+                })
+            }
             Arch::Avr => ArchKind::Avr,
             Arch::LoongArch32 | Arch::LoongArch64 => ArchKind::LoongArch,
             Arch::Msp430 => ArchKind::Msp430,
