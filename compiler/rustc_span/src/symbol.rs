@@ -2285,6 +2285,7 @@ symbols! {
         xer,
         xmm_reg,
         xop_target_feature,
+        tc32,
         xtensa,
         yeet_desugar_details,
         yeet_expr,

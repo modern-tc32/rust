@@ -683,7 +683,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
                 aarch64::compute_abi_info(cx, self, kind)
             }
             Arch::AmdGpu => amdgpu::compute_abi_info(cx, self),
-            Arch::Arm => arm::compute_abi_info(cx, self),
+            Arch::Arm | Arch::Tc32 => arm::compute_abi_info(cx, self),
             Arch::Avr => avr::compute_abi_info(cx, self),
             Arch::LoongArch32 | Arch::LoongArch64 => loongarch::compute_abi_info(cx, self),
             Arch::M68k => m68k::compute_abi_info(cx, self),

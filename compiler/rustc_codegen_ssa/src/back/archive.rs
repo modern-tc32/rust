@@ -124,7 +124,7 @@ pub trait ArchiveBuilderBuilder {
                 Arch::X86 => MachineTypes::I386,
                 Arch::AArch64 => MachineTypes::ARM64,
                 Arch::Arm64EC => MachineTypes::ARM64EC,
-                Arch::Arm => MachineTypes::ARMNT,
+                Arch::Arm | Arch::Tc32 => MachineTypes::ARMNT,
                 cpu => panic!("unsupported cpu type {cpu}"),
             };
 
@@ -229,7 +229,7 @@ fn create_mingw_dll_import_lib(
         Arch::X86_64 => ("i386:x86-64", "--64"),
         Arch::X86 => ("i386", "--32"),
         Arch::AArch64 => ("arm64", "--64"),
-        Arch::Arm => ("arm", "--32"),
+        Arch::Arm | Arch::Tc32 => ("arm", "--32"),
         arch => panic!("unsupported arch {arch}"),
     };
     let mut dlltool_cmd = std::process::Command::new(&dlltool);

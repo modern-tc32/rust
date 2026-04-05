@@ -843,7 +843,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
                 // <https://github.com/llvm/llvm-project/issues/64521>.
                 let use_nontemporal = matches!(
                     self.cx.tcx.sess.target.arch,
-                    Arch::AArch64 | Arch::Arm | Arch::RiscV32 | Arch::RiscV64
+                    Arch::AArch64 | Arch::Arm | Arch::Tc32 | Arch::RiscV32 | Arch::RiscV64
                 );
                 if use_nontemporal {
                     // According to LLVM [1] building a nontemporal store must

@@ -248,7 +248,7 @@ pub(crate) fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> Option<LLVMFea
                 s => Some(LLVMFeature::new(s)),
             }
         }
-        Arch::Arm => match s {
+        Arch::Arm | Arch::Tc32 => match s {
             "fp16" => Some(LLVMFeature::new("fullfp16")),
             s => Some(LLVMFeature::new(s)),
         },
