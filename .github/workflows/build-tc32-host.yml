@@ -275,12 +275,250 @@ jobs:
             throw "tc32 target_arch cfg is missing"
           }
 
-      - name: Upload stage1 artifacts
+      - name: Package standalone toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST_TRIPLE="${{ matrix.host_triple }}"
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage1-$HOST_TRIPLE"
+          SNAPSHOT_RUSTC="$(rustup which rustc)"
+          SNAPSHOT_SYSROOT="$("$SNAPSHOT_RUSTC" --print sysroot)"
+          rm -rf "$TOOLCHAIN_DIR"
+          mkdir -p \
+            "$TOOLCHAIN_DIR/bin" \
+            "$TOOLCHAIN_DIR/lib" \
+            "$TOOLCHAIN_DIR/llvm/bin" \
+            "$TOOLCHAIN_DIR/llvm/lib" \
+            "$TOOLCHAIN_DIR/snapshot/bin" \
+            "$TOOLCHAIN_DIR/snapshot/lib"
+
+          cp "build/bootstrap/debug/rustc" "$TOOLCHAIN_DIR/bin/rustc-bootstrap"
+          cp "build/$HOST_TRIPLE/stage1/bin/rustc" "$TOOLCHAIN_DIR/bin/rustc-real"
+          cp "build/$HOST_TRIPLE/stage1-tools-bin/cargo" "$TOOLCHAIN_DIR/bin/cargo-real"
+          cp "$SNAPSHOT_RUSTC" "$TOOLCHAIN_DIR/snapshot/bin/rustc"
+          cp -R "build/$HOST_TRIPLE/stage1/lib/." "$TOOLCHAIN_DIR/lib/"
+          cp -R "$SNAPSHOT_SYSROOT/lib/." "$TOOLCHAIN_DIR/snapshot/lib/"
+          cp -R "$GITHUB_WORKSPACE/llvm-toolchain/bin/." "$TOOLCHAIN_DIR/llvm/bin/"
+          if [ -d "$GITHUB_WORKSPACE/llvm-toolchain/lib/clang" ]; then
+            cp -R "$GITHUB_WORKSPACE/llvm-toolchain/lib/clang" "$TOOLCHAIN_DIR/llvm/lib/"
+          fi
+
+          cat > "$TOOLCHAIN_DIR/toolchain.toml" <<EOF
+          host_triple = "$HOST_TRIPLE"
+          target_triple = "tc32-unknown-none-elf"
+          channel = "stage1-local"
+
+          [paths]
+          cargo = "bin/cargo"
+          rustc = "bin/rustc"
+          real_rustc = "bin/rustc-real"
+          bootstrap_rustc = "bin/rustc-bootstrap"
+          snapshot_rustc = "snapshot/bin/rustc"
+          sysroot = "."
+          llvm_bin = "llvm/bin"
+          EOF
+
+          cat > "$TOOLCHAIN_DIR/bin/rustc" <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          root=$(
+              CDPATH= cd -- "$(dirname "$0")/.." && pwd
+          )
+
+          host_dylib_var() {
+              case "$(uname -s)" in
+                  Darwin) printf '%s\n' DYLD_FALLBACK_LIBRARY_PATH ;;
+                  Linux) printf '%s\n' LD_LIBRARY_PATH ;;
+                  *) printf '%s\n' LD_LIBRARY_PATH ;;
+              esac
+          }
+
+          has_flag() {
+              flag=$1
+              shift
+              for arg in "$@"; do
+                  if [ "$arg" = "$flag" ]; then
+                      return 0
+                  fi
+              done
+              return 1
+          }
+
+          value_for_flag() {
+              flag=$1
+              shift
+              prev=
+              for arg in "$@"; do
+                  if [ "$prev" = "$flag" ]; then
+                      printf '%s\n' "$arg"
+                      return 0
+                  fi
+                  case "$arg" in
+                      "$flag="*)
+                          printf '%s\n' "${arg#*=}"
+                          return 0
+                          ;;
+                  esac
+                  prev=$arg
+              done
+              return 1
+          }
+
+          version_query=0
+          if has_flag "-vV" "$@"; then
+              version_query=1
+          fi
+
+          target=
+          if target=$(value_for_flag "--target" "$@"); then
+              :
+          else
+              target=
+          fi
+
+          is_build_script=0
+          if [ -z "$target" ] && [ "$version_query" -eq 0 ]; then
+              is_build_script=1
+          fi
+
+          if [ "$is_build_script" -eq 1 ]; then
+              compiler="$root/snapshot/bin/rustc"
+              libdir="$root/snapshot/lib"
+              set -- "$@"
+          else
+              compiler="$root/bin/rustc-real"
+              libdir="$root/lib"
+              if [ -n "$target" ] && ! has_flag "--sysroot" "$@"; then
+                  set -- "$@" --sysroot "$root"
+              fi
+          fi
+
+          dylib_var=$(host_dylib_var)
+          eval "old_dylib_path=\${$dylib_var-}"
+          if [ -n "${old_dylib_path:-}" ]; then
+              new_dylib_path="$libdir:$old_dylib_path"
+          else
+              new_dylib_path="$libdir"
+          fi
+
+          env "$dylib_var=$new_dylib_path" "$compiler" "$@"
+          EOF
+
+          cat > "$TOOLCHAIN_DIR/bin/cargo" <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          root=$(
+              CDPATH= cd -- "$(dirname "$0")/.." && pwd
+          )
+
+          export RUSTC="${RUSTC:-$root/bin/rustc}"
+          export TC32_LLVM_BIN="${TC32_LLVM_BIN:-$root/llvm/bin}"
+          export CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER="${CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER:-$root/llvm/bin/ld.lld}"
+
+          exec "$root/bin/cargo-real" "$@"
+          EOF
+
+          chmod +x "$TOOLCHAIN_DIR/bin/rustc" "$TOOLCHAIN_DIR/bin/cargo"
+          tar -czf "$GITHUB_WORKSPACE/tc32-rust-toolchain-${{ matrix.host }}.tar.gz" \
+            -C "$GITHUB_WORKSPACE" "$(basename "$TOOLCHAIN_DIR")"
+
+      - name: Package standalone toolchain (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $hostTriple = "${{ matrix.host_triple }}"
+          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage1-$hostTriple"
+          $snapshotRustc = (rustup which rustc).Trim()
+          $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
+          Remove-Item -Recurse -Force $toolchainDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $toolchainDir "bin"), `
+            (Join-Path $toolchainDir "lib"), `
+            (Join-Path $toolchainDir "llvm/bin"), `
+            (Join-Path $toolchainDir "llvm/lib"), `
+            (Join-Path $toolchainDir "snapshot/bin"), `
+            (Join-Path $toolchainDir "snapshot/lib") | Out-Null
+
+          Copy-Item "build/bootstrap/debug/rustc.exe" (Join-Path $toolchainDir "bin/rustc-bootstrap.exe")
+          Copy-Item "build/$hostTriple/stage1/bin/rustc.exe" (Join-Path $toolchainDir "bin/rustc-real.exe")
+          Copy-Item "build/$hostTriple/stage1-tools-bin/cargo.exe" (Join-Path $toolchainDir "bin/cargo-real.exe")
+          Copy-Item $snapshotRustc (Join-Path $toolchainDir "snapshot/bin/rustc.exe")
+          Copy-Item "build/$hostTriple/stage1/lib/*" (Join-Path $toolchainDir "lib") -Recurse
+          Copy-Item (Join-Path $snapshotSysroot "lib/*") (Join-Path $toolchainDir "snapshot/lib") -Recurse
+          Copy-Item "$env:GITHUB_WORKSPACE/llvm-toolchain/bin/*" (Join-Path $toolchainDir "llvm/bin") -Recurse
+          if (Test-Path "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang") {
+            Copy-Item "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang" (Join-Path $toolchainDir "llvm/lib") -Recurse
+          }
+
+          $toolchainToml = @"
+          host_triple = "$hostTriple"
+          target_triple = "tc32-unknown-none-elf"
+          channel = "stage1-local"
+
+          [paths]
+          cargo = "bin/cargo.cmd"
+          rustc = "bin/rustc.cmd"
+          real_rustc = "bin/rustc-real.exe"
+          bootstrap_rustc = "bin/rustc-bootstrap.exe"
+          snapshot_rustc = "snapshot/bin/rustc.exe"
+          sysroot = "."
+          llvm_bin = "llvm/bin"
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "toolchain.toml") -Value $toolchainToml
+
+          $rustcCmd = @"
+          @echo off
+          setlocal EnableDelayedExpansion
+          set "ROOT=%~dp0.."
+          set "ARGS=%*"
+          set "TARGET_ARG="
+          set "VERSION_QUERY=0"
+          :scan
+          if "%~1"=="" goto scanned
+          if "%~1"=="-vV" set "VERSION_QUERY=1"
+          if "%~1"=="--target" (
+            set "TARGET_ARG=%~2"
+            shift
+          ) else (
+            set "ARG1=%~1"
+            if /I "!ARG1:~0,9!"=="--target=" set "TARGET_ARG=!ARG1:~9!"
+          )
+          shift
+          goto scan
+          :scanned
+          if defined TARGET_ARG goto target_mode
+          if "%VERSION_QUERY%"=="1" goto target_mode
+          set "PATH=%ROOT%\snapshot\lib;%PATH%"
+          "%ROOT%\snapshot\bin\rustc.exe" %ARGS%
+          exit /b %ERRORLEVEL%
+          :target_mode
+          set "PATH=%ROOT%\lib;%PATH%"
+          "%ROOT%\bin\rustc-real.exe" %ARGS% --sysroot "%ROOT%"
+          exit /b %ERRORLEVEL%
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "bin/rustc.cmd") -Value $rustcCmd
+
+          $cargoCmd = @"
+          @echo off
+          setlocal
+          set "ROOT=%~dp0.."
+          if not defined RUSTC set "RUSTC=%ROOT%\bin\rustc.cmd"
+          if not defined TC32_LLVM_BIN set "TC32_LLVM_BIN=%ROOT%\llvm\bin"
+          if not defined CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER set "CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER=%ROOT%\llvm\bin\ld.lld.exe"
+          "%ROOT%\bin\cargo-real.exe" %*
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "bin/cargo.cmd") -Value $cargoCmd
+
+          Compress-Archive -Path $toolchainDir -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "tc32-rust-toolchain-${{ matrix.host }}.zip") -Force
+
+      - name: Upload standalone toolchain artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rust-host-${{ matrix.host }}
+          name: tc32-rust-toolchain-${{ matrix.host }}
           if-no-files-found: error
           path: |
-            build/${{ matrix.host_triple }}/stage1/bin/rustc*
-            build/${{ matrix.host_triple }}/stage1-tools-bin/cargo*
-            bootstrap.toml
+            tc32-rust-toolchain-${{ matrix.host }}.tar.gz
+            tc32-rust-toolchain-${{ matrix.host }}.zip
