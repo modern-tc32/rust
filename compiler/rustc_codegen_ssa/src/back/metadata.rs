@@ -20,7 +20,7 @@ use rustc_metadata::fs::METADATA_FILENAME;
 use rustc_middle::bug;
 use rustc_session::Session;
 use rustc_span::sym;
-use rustc_target::spec::{CfgAbi, LlvmAbi, Os, RelocModel, Target, ef_avr_arch};
+use rustc_target::spec::{Arch, CfgAbi, LlvmAbi, Os, RelocModel, Target, ef_avr_arch};
 use tracing::debug;
 
 use super::apple;
@@ -257,6 +257,31 @@ pub(crate) fn create_object_file(sess: &Session) -> Option<write::Object<'static
     add_gnu_property_note(&mut file, architecture, binary_format, endianness);
     file.flags = FileFlags::Elf { os_abi, abi_version, e_flags };
     Some(file)
+}
+
+pub(crate) fn patch_tc32_elf_header(sess: &Session, bytes: &mut [u8]) {
+    const ELFCLASS32: u8 = 1;
+    const EI_OSABI: usize = 7;
+    const E_MACHINE_OFFSET: usize = 18;
+    const E_FLAGS32_OFFSET: usize = 36;
+    const ELFOSABI_TC32: u8 = 0x58;
+    const EM_TC32: u16 = 0x8800;
+
+    if sess.target.arch != Arch::Tc32 {
+        return;
+    }
+
+    if bytes.len() < E_FLAGS32_OFFSET + 4 || bytes.get(4).copied() != Some(ELFCLASS32) {
+        return;
+    }
+
+    if bytes.get(0..4) != Some(&[0x7f, b'E', b'L', b'F']) {
+        return;
+    }
+
+    bytes[EI_OSABI] = ELFOSABI_TC32;
+    bytes[E_MACHINE_OFFSET..E_MACHINE_OFFSET + 2].copy_from_slice(&EM_TC32.to_le_bytes());
+    bytes[E_FLAGS32_OFFSET..E_FLAGS32_OFFSET + 4].copy_from_slice(&0u32.to_le_bytes());
 }
 
 pub(super) fn elf_os_abi(sess: &Session) -> u8 {
@@ -550,7 +575,9 @@ pub(crate) fn create_wrapper_file(
         _ => {}
     };
     file.append_section_data(section, data, 1);
-    (file.write().unwrap(), MetadataPosition::First)
+    let mut bytes = file.write().unwrap();
+    patch_tc32_elf_header(sess, &mut bytes);
+    (bytes, MetadataPosition::First)
 }
 
 // Historical note:
@@ -612,7 +639,9 @@ pub fn create_compressed_metadata_file(
         flags: SymbolFlags::None,
     });
 
-    file.write().unwrap()
+    let mut bytes = file.write().unwrap();
+    patch_tc32_elf_header(sess, &mut bytes);
+    bytes
 }
 
 /// * Xcoff - On AIX, custom sections are merged into predefined sections,

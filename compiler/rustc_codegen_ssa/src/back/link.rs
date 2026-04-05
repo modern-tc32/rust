@@ -2172,7 +2172,9 @@ fn add_linked_symbol_object(
     }
 
     let path = tmpdir.join("symbols.o");
-    let result = std::fs::write(&path, file.write().unwrap());
+    let mut bytes = file.write().unwrap();
+    super::metadata::patch_tc32_elf_header(sess, &mut bytes);
+    let result = std::fs::write(&path, bytes);
     if let Err(error) = result {
         sess.dcx().emit_fatal(errors::FailedToWrite { path, error });
     }
