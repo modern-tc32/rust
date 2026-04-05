@@ -256,7 +256,7 @@ impl InlineAsmArch {
         match arch {
             Arch::X86 => Some(Self::X86),
             Arch::X86_64 => Some(Self::X86_64),
-            Arch::Arm => Some(Self::Arm),
+            Arch::Arm | Arch::Tc32 => Some(Self::Arm),
             Arch::Arm64EC => Some(Self::Arm64EC),
             Arch::AArch64 => Some(Self::AArch64),
             Arch::AmdGpu => Some(Self::Amdgpu),

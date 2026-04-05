@@ -2379,6 +2379,7 @@ symbols! {
         xmm_reg,
         xop_target_feature,
         xreg,
+        tc32,
         xtensa,
         xtensa_target_feature,
         yeet_desugar_details,

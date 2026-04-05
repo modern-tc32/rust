@@ -1126,7 +1126,7 @@ pub struct FeatureConstraints {
 impl Target {
     pub fn rust_target_features(&self) -> &'static [(&'static str, Stability, ImpliedFeatures)] {
         match &self.arch {
-            Arch::Arm => ARM_FEATURES,
+            Arch::Arm | Arch::Tc32 => ARM_FEATURES,
             Arch::AArch64 | Arch::Arm64EC => AARCH64_FEATURES,
             Arch::X86 | Arch::X86_64 => X86_FEATURES,
             Arch::Hexagon => HEXAGON_FEATURES,
@@ -1151,7 +1151,7 @@ impl Target {
         match &self.arch {
             Arch::X86 | Arch::X86_64 => X86_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
             Arch::AArch64 | Arch::Arm64EC => AARCH64_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
-            Arch::Arm => ARM_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
+            Arch::Arm | Arch::Tc32 => ARM_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
             Arch::PowerPC | Arch::PowerPC64 => POWERPC_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
             Arch::LoongArch32 | Arch::LoongArch64 => {
                 LOONGARCH_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI
@@ -1271,7 +1271,7 @@ impl Target {
                     _ => unreachable!(),
                 }
             }
-            Arch::Arm => {
+            Arch::Arm | Arch::Tc32 => {
                 // On ARM, ABI handling is reasonably sane; we use `llvm_floatabi` to indicate
                 // to LLVM which ABI we are going for.
                 match self.llvm_floatabi.unwrap() {
