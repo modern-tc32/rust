@@ -248,7 +248,7 @@ jobs:
         if: matrix.is_windows
         shell: pwsh
         env:
-          LLVM_LINKER_FLAGS: -llibcmt -llibcpmt -llibvcruntime -llibucrt -loldnames
+          LLVM_LINKER_FLAGS: -lucrt -lvcruntime -lmsvcrt -llegacy_stdio_definitions -loldnames
         run: |
           python x.py build --stage 1 compiler/rustc src/tools/cargo
 
