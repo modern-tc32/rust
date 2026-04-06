@@ -77,10 +77,10 @@ jobs:
             runs_on: macos-14
             host_triple: aarch64-apple-darwin
             is_windows: false
-          - host: windows-amd64
-            runs_on: windows-latest
-            host_triple: x86_64-pc-windows-msvc
-            is_windows: true
+#          - host: windows-amd64
+#            runs_on: windows-latest
+#            host_triple: x86_64-pc-windows-msvc
+#            is_windows: true
 
     steps:
       - name: Checkout Rust
@@ -554,7 +554,6 @@ jobs:
           Included host artifacts:
           - linux-amd64
           - macos-arm64
-          - windows-amd64
           EOF
 
       - name: Publish GitHub prerelease
