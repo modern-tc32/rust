@@ -19,7 +19,7 @@ on:
       - "x.py"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: tc32-rust-host-${{ github.ref }}
@@ -524,3 +524,45 @@ jobs:
           path: |
             tc32-rust-toolchain-${{ matrix.host }}.tar.gz
             tc32-rust-toolchain-${{ matrix.host }}.zip
+
+  publish-prerelease:
+    needs:
+      - resolve-llvm-run
+      - build-host
+    if: github.event_name != 'pull_request'
+    name: Publish prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download standalone toolchain artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tc32-rust-toolchain-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          TC32 Rust stage1 host toolchain prerelease for \`${{ github.ref_name }}\`.
+
+          Source commit: \`${{ github.sha }}\`
+          Rust workflow run: \`${{ github.run_id }}\`
+          LLVM workflow run: \`${{ needs.resolve-llvm-run.outputs.run_id }}\`
+
+          Included host artifacts:
+          - linux-amd64
+          - macos-arm64
+          - windows-amd64
+          EOF
+
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: tc32-stage1-${{ github.ref_name }}-${{ github.run_number }}
+          name: TC32 Rust stage1 ${{ github.ref_name }} #${{ github.run_number }}
+          prerelease: true
+          generate_release_notes: false
+          body_path: release-notes.md
+          files: release-artifacts/*
