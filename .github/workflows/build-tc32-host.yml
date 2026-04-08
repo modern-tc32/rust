@@ -194,6 +194,7 @@ jobs:
 
           [llvm]
           download-ci-llvm = false
+          link-shared = true
 
           [build]
           build = "${{ matrix.host_triple }}"
@@ -231,6 +232,7 @@ jobs:
           llvm-tools = false
 
           [target.${{ matrix.host_triple }}]
+          crt-static = false
           llvm-config = "$llvmBin/llvm-config.exe"
           llvm-filecheck = "$llvmBin/FileCheck.exe"
           llvm-has-rust-patches = false
