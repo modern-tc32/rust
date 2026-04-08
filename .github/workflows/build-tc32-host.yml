@@ -220,7 +220,6 @@ jobs:
 
           [llvm]
           download-ci-llvm = false
-          link-shared = true
 
           [build]
           build = "${{ matrix.host_triple }}"
@@ -232,7 +231,6 @@ jobs:
           llvm-tools = false
 
           [target.${{ matrix.host_triple }}]
-          crt-static = false
           llvm-config = "$llvmBin/llvm-config.exe"
           llvm-filecheck = "$llvmBin/FileCheck.exe"
           llvm-has-rust-patches = false
@@ -249,8 +247,6 @@ jobs:
       - name: Build stage1 Rust host toolchain (Windows)
         if: matrix.is_windows
         shell: pwsh
-        env:
-          LLVM_LINKER_FLAGS: -lucrt -lvcruntime -lmsvcrt -llegacy_stdio_definitions -loldnames
         run: |
           python x.py build --stage 1 compiler/rustc src/tools/cargo
 
