@@ -231,6 +231,7 @@ jobs:
           llvm-tools = false
 
           [target.${{ matrix.host_triple }}]
+          crt-static = false
           llvm-config = "$llvmBin/llvm-config.exe"
           llvm-filecheck = "$llvmBin/FileCheck.exe"
           llvm-has-rust-patches = false
