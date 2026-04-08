@@ -248,6 +248,8 @@ jobs:
       - name: Build stage1 Rust host toolchain (Windows)
         if: matrix.is_windows
         shell: pwsh
+        env:
+          LLVM_LINKER_FLAGS: -lucrt -lvcruntime -lmsvcrt -llegacy_stdio_definitions -loldnames
         run: |
           python x.py build --stage 1 compiler/rustc src/tools/cargo
 
