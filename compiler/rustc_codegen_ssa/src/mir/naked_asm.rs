@@ -164,7 +164,7 @@ fn prefix_and_suffix<'tcx>(
     } else if is_tc32 {
         (
             match attrs.instruction_set {
-                None | Some(InstructionSetAttr::ArmA32) => "",
+                None | Some(InstructionSetAttr::ArmA32) => ".code 16",
                 Some(InstructionSetAttr::ArmT32) => ".thumb\n.thumb_func",
             },
             match is_thumb {
@@ -226,12 +226,12 @@ fn prefix_and_suffix<'tcx>(
         BinaryFormat::Elf => {
             let section = link_section.unwrap_or_else(|| format!(".text.{asm_name}"));
 
-            let progbits = match is_arm {
+            let progbits = match is_arm || is_tc32 {
                 true => "%progbits",
                 false => "@progbits",
             };
 
-            let function = match is_arm {
+            let function = match is_arm || is_tc32 {
                 true => "%function",
                 false => "@function",
             };
