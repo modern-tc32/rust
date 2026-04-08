@@ -126,7 +126,8 @@ fn prefix_and_suffix<'tcx>(
 
     let asm_binary_format = &tcx.sess.target.binary_format;
 
-    let is_arm = matches!(tcx.sess.target.arch, Arch::Arm | Arch::Tc32);
+    let is_arm = tcx.sess.target.arch == Arch::Arm;
+    let is_tc32 = tcx.sess.target.arch == Arch::Tc32;
     let is_thumb = tcx.sess.unstable_target_features.contains(&sym::thumb_mode);
 
     // If we're compiling the compiler-builtins crate, e.g., the equivalent of
@@ -158,6 +159,17 @@ fn prefix_and_suffix<'tcx>(
             match is_thumb {
                 true => ".thumb",
                 false => ".arm",
+            },
+        )
+    } else if is_tc32 {
+        (
+            match attrs.instruction_set {
+                None | Some(InstructionSetAttr::ArmA32) => "",
+                Some(InstructionSetAttr::ArmT32) => ".thumb\n.thumb_func",
+            },
+            match is_thumb {
+                true => ".thumb",
+                false => "",
             },
         )
     } else {

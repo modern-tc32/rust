@@ -20,6 +20,121 @@ use crate::context::CodegenCx;
 use crate::llvm::{self, ToLlvmBool, Type, Value};
 use crate::type_of::LayoutLlvmExt;
 
+fn normalize_tc32_mnemonic(mnemonic: &str) -> &str {
+    match mnemonic {
+        "tj" => "b",
+        "tjl" => "bl",
+        "tjex" => "bx",
+        "tjeq" => "beq",
+        "tjne" => "bne",
+        "tjhs" => "bhs",
+        "tjlo" => "blo",
+        "tjmi" => "bmi",
+        "tjpl" => "bpl",
+        "tjvs" => "bvs",
+        "tjvc" => "bvc",
+        "tjhi" => "bhi",
+        "tjls" => "bls",
+        "tjge" => "bge",
+        "tjlt" => "blt",
+        "tjgt" => "bgt",
+        "tjle" => "ble",
+        "tcmp" => "cmp",
+        "tcmpn" => "cmn",
+        "tadd" => "adds",
+        "taddc" => "adcs",
+        "tmov" => "mov",
+        "tmovs" => "movs",
+        "tmovn" => "mvns",
+        "tpush" => "push",
+        "tpop" => "pop",
+        "tloadm" => "ldm",
+        "tloadr" => "ldr",
+        "tloadrb" => "ldrb",
+        "tloadrh" => "ldrh",
+        "tloadrsb" => "ldrsb",
+        "tloadrsh" => "ldrsh",
+        "tstorem" => "stm",
+        "tstorer" => "str",
+        "tstorerb" => "strb",
+        "tstorerh" => "strh",
+        "tand" => "ands",
+        "txor" => "eors",
+        "tor" => "orrs",
+        "tbclr" => "bics",
+        "tshftl" => "lsls",
+        "tshftr" => "lsrs",
+        "tasr" => "asrs",
+        "trotr" => "rors",
+        "tmul" => "muls",
+        "tsub" => "subs",
+        "tsubc" => "sbcs",
+        "tmrcs" => "tmrss",
+        _ => mnemonic,
+    }
+}
+
+fn normalize_tc32_asm(asm: &str) -> String {
+    fn is_ident_char(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_' || b == b'.'
+    }
+
+    let bytes = asm.as_bytes();
+    let mut out = String::with_capacity(asm.len());
+    let mut i = 0;
+    let mut at_stmt_start = true;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if matches!(b, b'\n' | b';') {
+            at_stmt_start = true;
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b':' {
+            out.push(':');
+            i += 1;
+            continue;
+        }
+
+        if !at_stmt_start || !is_ident_char(b) {
+            if !b.is_ascii_whitespace() {
+                at_stmt_start = false;
+            }
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        i += 1;
+        while i < bytes.len() && is_ident_char(bytes[i]) {
+            i += 1;
+        }
+
+        let token = &asm[start..i];
+        let mut lookahead = i;
+        while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
+            lookahead += 1;
+        }
+
+        if lookahead < bytes.len() && bytes[lookahead] == b':' {
+            out.push_str(token);
+            continue;
+        }
+
+        if token.starts_with('.') {
+            out.push_str(token);
+        } else {
+            out.push_str(normalize_tc32_mnemonic(token));
+        }
+        at_stmt_start = false;
+    }
+
+    out
+}
+
 impl<'ll, 'tcx> AsmBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
     fn codegen_inline_asm(
         &mut self,
@@ -223,10 +338,17 @@ impl<'ll, 'tcx> AsmBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
             }
         }
 
+        if asm_arch == InlineAsmArch::Tc32 {
+            template_str = normalize_tc32_asm(&template_str);
+        }
+
         constraints.append(&mut clobbers);
         if !options.contains(InlineAsmOptions::PRESERVES_FLAGS) {
             match asm_arch {
-                InlineAsmArch::AArch64 | InlineAsmArch::Arm64EC | InlineAsmArch::Arm => {
+                InlineAsmArch::AArch64
+                | InlineAsmArch::Arm64EC
+                | InlineAsmArch::Arm
+                | InlineAsmArch::Tc32 => {
                     constraints.push("~{cc}".to_string());
                 }
                 InlineAsmArch::X86 | InlineAsmArch::X86_64 => {
@@ -435,6 +557,10 @@ impl<'tcx> AsmCodegenMethods<'tcx> for CodegenCx<'_, 'tcx> {
                     }
                 }
             }
+        }
+
+        if asm_arch == InlineAsmArch::Tc32 {
+            template_str = normalize_tc32_asm(&template_str);
         }
 
         // Just to play it safe, if intel was used, reset the assembly syntax to att.
