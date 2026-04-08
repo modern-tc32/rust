@@ -18,7 +18,7 @@ global_asm!("tmov r0, r0");
 #[no_mangle]
 pub unsafe fn inline_tc32() -> u32 {
     let value: u32;
-    asm!("tmov {0}, {0}", lateout("r0") value, options(nomem, nostack));
+    asm!("tmov r0, r0", lateout("r0") value, options(nomem, nostack));
     value
 }
 

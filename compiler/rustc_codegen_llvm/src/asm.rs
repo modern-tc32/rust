@@ -20,7 +20,12 @@ use crate::context::CodegenCx;
 use crate::llvm::{self, ToLlvmBool, Type, Value};
 use crate::type_of::LayoutLlvmExt;
 
-fn normalize_tc32_mnemonic(mnemonic: &str) -> &str {
+fn tc32_statement_uses_high_regs(args: &str) -> bool {
+    args.split(|c: char| c == ',' || c.is_ascii_whitespace() || c == '[' || c == ']' || c == '{' || c == '}')
+        .any(|token| matches!(token, "r8" | "r9" | "r10" | "r11" | "r12" | "sp" | "lr" | "pc"))
+}
+
+fn normalize_tc32_mnemonic<'a>(mnemonic: &'a str, args: &str) -> &'a str {
     match mnemonic {
         "tj" => "b",
         "tjl" => "bl",
@@ -41,9 +46,11 @@ fn normalize_tc32_mnemonic(mnemonic: &str) -> &str {
         "tjle" => "ble",
         "tcmp" => "cmp",
         "tcmpn" => "cmn",
+        "tadd" if tc32_statement_uses_high_regs(args) => "add",
         "tadd" => "adds",
         "taddc" => "adcs",
-        "tmov" => "mov",
+        "tmov" if tc32_statement_uses_high_regs(args) => "mov",
+        "tmov" => "movs",
         "tmovs" => "movs",
         "tmovn" => "mvns",
         "tpush" => "push",
@@ -75,63 +82,29 @@ fn normalize_tc32_mnemonic(mnemonic: &str) -> &str {
 }
 
 fn normalize_tc32_asm(asm: &str) -> String {
-    fn is_ident_char(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || b == b'_' || b == b'.'
+    fn normalize_stmt(stmt: &str) -> String {
+        let prefix_len = stmt.len() - stmt.trim_start_matches(|c: char| c.is_ascii_whitespace()).len();
+        let (prefix, rest) = stmt.split_at(prefix_len);
+        let mnemonic_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == ':' )
+            .unwrap_or(rest.len());
+        let (mnemonic, args) = rest.split_at(mnemonic_end);
+        if mnemonic.is_empty() || mnemonic.starts_with('.') || args.starts_with(':') {
+            return stmt.to_string();
+        }
+        format!("{prefix}{}{args}", normalize_tc32_mnemonic(mnemonic, args))
     }
 
-    let bytes = asm.as_bytes();
-    let mut out = String::with_capacity(asm.len());
-    let mut i = 0;
-    let mut at_stmt_start = true;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        if matches!(b, b'\n' | b';') {
-            at_stmt_start = true;
-            out.push(b as char);
-            i += 1;
-            continue;
-        }
-        if b == b':' {
-            out.push(':');
-            i += 1;
-            continue;
-        }
-
-        if !at_stmt_start || !is_ident_char(b) {
-            if !b.is_ascii_whitespace() {
-                at_stmt_start = false;
-            }
-            out.push(b as char);
-            i += 1;
-            continue;
-        }
-
-        let start = i;
-        i += 1;
-        while i < bytes.len() && is_ident_char(bytes[i]) {
-            i += 1;
-        }
-
-        let token = &asm[start..i];
-        let mut lookahead = i;
-        while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
-            lookahead += 1;
-        }
-
-        if lookahead < bytes.len() && bytes[lookahead] == b':' {
-            out.push_str(token);
-            continue;
-        }
-
-        if token.starts_with('.') {
-            out.push_str(token);
+    let mut out = String::with_capacity(asm.len() + 16);
+    out.push_str(".code 16\n");
+    for segment in asm.split_inclusive('\n') {
+        if let Some((stmt, newline)) = segment.strip_suffix('\n').map(|s| (s, "\n")) {
+            out.push_str(&normalize_stmt(stmt));
+            out.push_str(newline);
         } else {
-            out.push_str(normalize_tc32_mnemonic(token));
+            out.push_str(&normalize_stmt(segment));
         }
-        at_stmt_start = false;
     }
-
     out
 }
 
