@@ -194,7 +194,6 @@ jobs:
 
           [llvm]
           download-ci-llvm = false
-          link-shared = true
 
           [build]
           build = "${{ matrix.host_triple }}"
@@ -221,6 +220,7 @@ jobs:
 
           [llvm]
           download-ci-llvm = false
+          link-shared = true
 
           [build]
           build = "${{ matrix.host_triple }}"
