@@ -433,6 +433,32 @@ jobs:
           $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage1-$hostTriple"
           $snapshotRustc = (rustup which rustc).Trim()
           $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
+          function Copy-SysrootLib([string]$sourceLibDir, [string]$destLibDir) {
+            $sourceLibDir = (Resolve-Path $sourceLibDir).Path
+            New-Item -ItemType Directory -Force -Path $destLibDir | Out-Null
+            $excludeDirs = @(
+              (Join-Path $sourceLibDir "rustlib\\src"),
+              (Join-Path $sourceLibDir "rustlib\\rustc-src")
+            ) | Where-Object { Test-Path $_ }
+            $robocopyArgs = @(
+              $sourceLibDir,
+              $destLibDir,
+              '/E',
+              '/NFL',
+              '/NDL',
+              '/NJH',
+              '/NJS',
+              '/NP'
+            )
+            if ($excludeDirs.Count -gt 0) {
+              $robocopyArgs += '/XD'
+              $robocopyArgs += $excludeDirs
+            }
+            & robocopy @robocopyArgs | Out-Null
+            if ($LASTEXITCODE -ge 8) {
+              throw "robocopy failed with exit code $LASTEXITCODE"
+            }
+          }
           Remove-Item -Recurse -Force $toolchainDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path `
             (Join-Path $toolchainDir "bin"), `
@@ -446,8 +472,8 @@ jobs:
           Copy-Item "build/$hostTriple/stage1/bin/rustc.exe" (Join-Path $toolchainDir "bin/rustc-real.exe")
           Copy-Item "build/$hostTriple/stage1-tools-bin/cargo.exe" (Join-Path $toolchainDir "bin/cargo-real.exe")
           Copy-Item $snapshotRustc (Join-Path $toolchainDir "snapshot/bin/rustc.exe")
-          Copy-Item "build/$hostTriple/stage1/lib/*" (Join-Path $toolchainDir "lib") -Recurse
-          Copy-Item (Join-Path $snapshotSysroot "lib/*") (Join-Path $toolchainDir "snapshot/lib") -Recurse
+          Copy-SysrootLib "build/$hostTriple/stage1/lib" (Join-Path $toolchainDir "lib")
+          Copy-SysrootLib (Join-Path $snapshotSysroot "lib") (Join-Path $toolchainDir "snapshot/lib")
           Copy-Item "$env:GITHUB_WORKSPACE/llvm-toolchain/bin/*" (Join-Path $toolchainDir "llvm/bin") -Recurse
           if (Test-Path "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang") {
             Copy-Item "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang" (Join-Path $toolchainDir "llvm/lib") -Recurse
