@@ -538,7 +538,14 @@ jobs:
           "@
           Set-Content -Path (Join-Path $toolchainDir "bin/cargo.cmd") -Value $cargoCmd
 
-          Compress-Archive -Path $toolchainDir -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "tc32-rust-toolchain-${{ matrix.host }}.zip") -Force
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "tc32-rust-toolchain-${{ matrix.host }}.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item -Force $zipPath
+          }
+          & tar.exe -a -c -f $zipPath -C $env:GITHUB_WORKSPACE ("tc32-stage1-$hostTriple")
+          if ($LASTEXITCODE -ne 0) {
+            throw "tar.exe failed with exit code $LASTEXITCODE"
+          }
 
       - name: Upload standalone toolchain artifact
         uses: actions/upload-artifact@v4
