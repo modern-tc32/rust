@@ -731,12 +731,23 @@ jobs:
     name: Publish prerelease
     runs-on: ubuntu-latest
     steps:
-      - name: Download standalone toolchain artifacts
+      - name: Download Linux standalone toolchain artifact
         uses: actions/download-artifact@v4
         with:
-          pattern: tc32-rust-toolchain-*
+          name: tc32-rust-toolchain-linux-amd64
           path: release-artifacts
-          merge-multiple: true
+
+      - name: Download macOS standalone toolchain artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tc32-rust-toolchain-macos-arm64
+          path: release-artifacts
+
+      - name: Download Windows standalone toolchain artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tc32-rust-toolchain-windows-amd64
+          path: release-artifacts/tc32-stage1-x86_64-pc-windows-msvc
 
       - name: Write release notes
         shell: bash
