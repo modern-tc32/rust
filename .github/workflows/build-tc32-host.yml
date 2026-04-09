@@ -425,8 +425,108 @@ jobs:
           tar -czf "$GITHUB_WORKSPACE/tc32-rust-toolchain-${{ matrix.host }}.tar.gz" \
             -C "$GITHUB_WORKSPACE" "$(basename "$TOOLCHAIN_DIR")"
 
-      - name: Package standalone toolchain (Windows)
+      - name: Inspect standalone toolchain inputs (Windows)
         if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $hostTriple = "${{ matrix.host_triple }}"
+          $stage1Lib = Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage1/lib"
+          $snapshotRustc = (rustup which rustc).Trim()
+          $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
+          $snapshotLib = Join-Path $snapshotSysroot "lib"
+          $reportDir = Join-Path $env:GITHUB_WORKSPACE "windows-packaging-report"
+          Remove-Item -Recurse -Force $reportDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+
+          function Show-TreeStats([string]$label, [string]$root, [string]$prefix) {
+            Write-Host "##[group]$label"
+            Write-Host "Root: $root"
+            if (-not (Test-Path $root)) {
+              Write-Host "Missing"
+              "Missing: $root" | Set-Content -Path (Join-Path $reportDir "$prefix-summary.txt")
+              Write-Host "##[endgroup]"
+              return
+            }
+
+            $files = Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue
+            $dirs = Get-ChildItem -LiteralPath $root -Recurse -Force -Directory -ErrorAction SilentlyContinue
+            $reparse = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
+
+            $fileCount = @($files).Count
+            $dirCount = @($dirs).Count
+            $reparseCount = @($reparse).Count
+            $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
+            if ($null -eq $totalBytes) { $totalBytes = 0 }
+            $totalGiB = [Math]::Round($totalBytes / 1GB, 3)
+
+            @(
+              "Root: $root"
+              "Files: $fileCount"
+              "Directories: $dirCount"
+              "Reparse points: $reparseCount"
+              "Size bytes: $totalBytes"
+              "Size GiB: $totalGiB"
+            ) | Set-Content -Path (Join-Path $reportDir "$prefix-summary.txt")
+
+            Write-Host "Files: $fileCount"
+            Write-Host "Directories: $dirCount"
+            Write-Host "Reparse points: $reparseCount"
+            Write-Host "Size bytes: $totalBytes"
+            Write-Host "Size GiB: $totalGiB"
+
+            if ($reparseCount -gt 0) {
+              Write-Host "Reparse points:"
+              $reparseData = $reparse |
+                Select-Object FullName, LinkType, Attributes, Target
+              $reparseData |
+                Format-Table -AutoSize | Out-String -Width 4096 |
+                Write-Host
+              $reparseData | Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-reparse-points.csv")
+            }
+
+            Write-Host "Largest files:"
+            $largestFiles = $files |
+              Sort-Object Length -Descending
+            $largestFiles |
+              Select-Object -First 20 FullName, Length |
+              Format-Table -AutoSize | Out-String -Width 4096 |
+              Write-Host
+            $largestFiles | Select-Object FullName, Length |
+              Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-files-by-size.csv")
+
+            $dirSizes = @{}
+            foreach ($file in $files) {
+              $dir = Split-Path -Parent $file.FullName
+              if (-not $dirSizes.ContainsKey($dir)) {
+                $dirSizes[$dir] = [int64]0
+              }
+              $dirSizes[$dir] += $file.Length
+            }
+            $dirSizes.GetEnumerator() |
+              Sort-Object Value -Descending |
+              ForEach-Object {
+                [pscustomobject]@{
+                  FullName = $_.Key
+                  Length = $_.Value
+                }
+              } |
+              Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-directories-by-size.csv")
+
+            Write-Host "##[endgroup]"
+          }
+
+          Show-TreeStats "stage1 lib" $stage1Lib "stage1-lib"
+          Show-TreeStats "snapshot lib" $snapshotLib "snapshot-lib"
+
+          @(
+            "hostTriple=$hostTriple"
+            "stage1Lib=$stage1Lib"
+            "snapshotLib=$snapshotLib"
+          ) | Set-Content -Path (Join-Path $reportDir "paths.txt")
+
+      - name: Package standalone toolchain (Windows)
+        if: ${{ matrix.is_windows && false }}
         shell: pwsh
         run: |
           $hostTriple = "${{ matrix.host_triple }}"
@@ -547,7 +647,8 @@ jobs:
             throw "tar.exe failed with exit code $LASTEXITCODE"
           }
 
-      - name: Upload standalone toolchain artifact
+      - name: Upload standalone toolchain artifact (Unix)
+        if: ${{ !matrix.is_windows }}
         uses: actions/upload-artifact@v4
         with:
           name: tc32-rust-toolchain-${{ matrix.host }}
@@ -555,6 +656,14 @@ jobs:
           path: |
             tc32-rust-toolchain-${{ matrix.host }}.tar.gz
             tc32-rust-toolchain-${{ matrix.host }}.zip
+
+      - name: Upload packaging report artifact (Windows)
+        if: matrix.is_windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc32-rust-toolchain-${{ matrix.host }}-report
+          if-no-files-found: error
+          path: windows-packaging-report
 
   publish-prerelease:
     needs:
