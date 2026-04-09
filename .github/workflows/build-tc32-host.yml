@@ -526,7 +526,7 @@ jobs:
           ) | Set-Content -Path (Join-Path $reportDir "paths.txt")
 
       - name: Package standalone toolchain (Windows)
-        if: ${{ matrix.is_windows && false }}
+        if: matrix.is_windows
         shell: pwsh
         run: |
           $hostTriple = "${{ matrix.host_triple }}"
@@ -638,15 +638,6 @@ jobs:
           "@
           Set-Content -Path (Join-Path $toolchainDir "bin/cargo.cmd") -Value $cargoCmd
 
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE "tc32-rust-toolchain-${{ matrix.host }}.zip"
-          if (Test-Path $zipPath) {
-            Remove-Item -Force $zipPath
-          }
-          & tar.exe -a -c -f $zipPath -C $env:GITHUB_WORKSPACE ("tc32-stage1-$hostTriple")
-          if ($LASTEXITCODE -ne 0) {
-            throw "tar.exe failed with exit code $LASTEXITCODE"
-          }
-
       - name: Upload standalone toolchain artifact (Unix)
         if: ${{ !matrix.is_windows }}
         uses: actions/upload-artifact@v4
@@ -657,11 +648,20 @@ jobs:
             tc32-rust-toolchain-${{ matrix.host }}.tar.gz
             tc32-rust-toolchain-${{ matrix.host }}.zip
 
+      - name: Upload standalone toolchain artifact (Windows)
+        if: matrix.is_windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc32-rust-toolchain-${{ matrix.host }}
+          if-no-files-found: error
+          compression-level: 0
+          path: tc32-stage1-${{ matrix.host_triple }}
+
       - name: Upload packaging report artifact (Windows)
         if: matrix.is_windows
         uses: actions/upload-artifact@v4
         with:
-          name: tc32-rust-toolchain-${{ matrix.host }}-report
+          name: tc32-windows-packaging-report-${{ matrix.host }}
           if-no-files-found: error
           path: windows-packaging-report
 
@@ -696,6 +696,22 @@ jobs:
           - macos-arm64
           - windows-amd64
           EOF
+
+      - name: Package Windows standalone toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          WINDOWS_DIR="$GITHUB_WORKSPACE/release-artifacts/tc32-stage1-x86_64-pc-windows-msvc"
+          if [ -d "$WINDOWS_DIR" ]; then
+            (
+              cd "$GITHUB_WORKSPACE/release-artifacts"
+              zip -qr tc32-rust-toolchain-windows-amd64.zip "$(basename "$WINDOWS_DIR")"
+            )
+            rm -rf "$WINDOWS_DIR"
+          else
+            echo "missing expected Windows toolchain directory: $WINDOWS_DIR" >&2
+            exit 1
+          fi
 
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@v2
