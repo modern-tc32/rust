@@ -576,7 +576,7 @@ jobs:
               }
               $copiedCount += 1
             }
-            Write-Host "$label copied entries: $copiedCount"
+            Write-Host "${label} copied entries: $copiedCount"
           }
           function Show-ReparsePoints([string]$rootDir) {
             if (-not (Test-Path $rootDir)) {
@@ -585,10 +585,10 @@ jobs:
             $points = Get-ChildItem -LiteralPath $rootDir -Recurse -Force -ErrorAction SilentlyContinue |
               Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
             if (@($points).Count -eq 0) {
-              Write-Host "No reparse points under $rootDir"
+              Write-Host "No reparse points under ${rootDir}"
               return
             }
-            Write-Host "Reparse points under $rootDir:"
+            Write-Host "Reparse points under ${rootDir}:"
             $points |
               Select-Object FullName, LinkType, Attributes, Target |
               Format-Table -AutoSize | Out-String -Width 4096 |
