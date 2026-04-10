@@ -241,40 +241,40 @@ jobs:
           "@
           Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE "bootstrap.toml") -Value $content
 
-      - name: Build stage1 Rust host toolchain (Unix)
+      - name: Build stage2 Rust host toolchain (Unix)
         if: ${{ !matrix.is_windows }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 x.py build --stage 1 compiler/rustc src/tools/cargo
+          python3 x.py build --stage 2 compiler/rustc src/tools/cargo
 
-      - name: Build stage1 Rust host toolchain (Windows)
+      - name: Build stage2 Rust host toolchain (Windows)
         if: matrix.is_windows
         shell: pwsh
         run: |
-          python x.py build --stage 1 compiler/rustc src/tools/cargo
+          python x.py build --stage 2 compiler/rustc src/tools/cargo
 
-      - name: Verify stage1 rustc (Unix)
+      - name: Verify stage2 rustc (Unix)
         if: ${{ !matrix.is_windows }}
         shell: bash
         run: |
           set -euo pipefail
-          STAGE1="$GITHUB_WORKSPACE/build/${{ matrix.host_triple }}/stage1/bin/rustc"
-          "$STAGE1" --version
-          "$STAGE1" --print target-list | grep -Fx tc32-unknown-none-elf
-          "$STAGE1" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
+          STAGE2="$GITHUB_WORKSPACE/build/${{ matrix.host_triple }}/stage2/bin/rustc"
+          "$STAGE2" --version
+          "$STAGE2" --print target-list | grep -Fx tc32-unknown-none-elf
+          "$STAGE2" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
 
-      - name: Verify stage1 rustc (Windows)
+      - name: Verify stage2 rustc (Windows)
         if: matrix.is_windows
         shell: pwsh
         run: |
-          $stage1 = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host_triple }}/stage1/bin/rustc.exe"
-          & $stage1 --version
-          $targets = & $stage1 --print target-list
+          $stage2 = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host_triple }}/stage2/bin/rustc.exe"
+          & $stage2 --version
+          $targets = & $stage2 --print target-list
           if (-not ($targets | Select-String -Pattern '^tc32-unknown-none-elf$')) {
             throw "tc32-unknown-none-elf target is missing"
           }
-          $cfg = & $stage1 --print cfg --target tc32-unknown-none-elf
+          $cfg = & $stage2 --print cfg --target tc32-unknown-none-elf
           if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
             throw "tc32 target_arch cfg is missing"
           }
@@ -285,7 +285,7 @@ jobs:
         run: |
           set -euo pipefail
           HOST_TRIPLE="${{ matrix.host_triple }}"
-          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage1-$HOST_TRIPLE"
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage2-$HOST_TRIPLE"
           SNAPSHOT_RUSTC="$(rustup which rustc)"
           SNAPSHOT_SYSROOT="$("$SNAPSHOT_RUSTC" --print sysroot)"
           rm -rf "$TOOLCHAIN_DIR"
@@ -298,10 +298,10 @@ jobs:
             "$TOOLCHAIN_DIR/snapshot/lib"
 
           cp "build/bootstrap/debug/rustc" "$TOOLCHAIN_DIR/bin/rustc-bootstrap"
-          cp "build/$HOST_TRIPLE/stage1/bin/rustc" "$TOOLCHAIN_DIR/bin/rustc-real"
-          cp "build/$HOST_TRIPLE/stage1-tools-bin/cargo" "$TOOLCHAIN_DIR/bin/cargo-real"
+          cp "build/$HOST_TRIPLE/stage2/bin/rustc" "$TOOLCHAIN_DIR/bin/rustc-real"
+          cp "build/$HOST_TRIPLE/stage2-tools-bin/cargo" "$TOOLCHAIN_DIR/bin/cargo-real"
           cp "$SNAPSHOT_RUSTC" "$TOOLCHAIN_DIR/snapshot/bin/rustc"
-          cp -R "build/$HOST_TRIPLE/stage1/lib/." "$TOOLCHAIN_DIR/lib/"
+          cp -R "build/$HOST_TRIPLE/stage2/lib/." "$TOOLCHAIN_DIR/lib/"
           cp -R "$SNAPSHOT_SYSROOT/lib/." "$TOOLCHAIN_DIR/snapshot/lib/"
           cp -R "$GITHUB_WORKSPACE/llvm-toolchain/bin/." "$TOOLCHAIN_DIR/llvm/bin/"
           if [ -d "$GITHUB_WORKSPACE/llvm-toolchain/lib/clang" ]; then
@@ -311,7 +311,7 @@ jobs:
           cat > "$TOOLCHAIN_DIR/toolchain.toml" <<EOF
           host_triple = "$HOST_TRIPLE"
           target_triple = "tc32-unknown-none-elf"
-          channel = "stage1-local"
+          channel = "stage2-local"
 
           [paths]
           cargo = "bin/cargo"
@@ -434,7 +434,7 @@ jobs:
         shell: pwsh
         run: |
           $hostTriple = "${{ matrix.host_triple }}"
-          $stage1Lib = Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage1/lib"
+          $stage2Lib = Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage2/lib"
           $snapshotRustc = (rustup which rustc).Trim()
           $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
           $snapshotLib = Join-Path $snapshotSysroot "lib"
@@ -520,12 +520,12 @@ jobs:
             Write-Host "##[endgroup]"
           }
 
-          Show-TreeStats "stage1 lib" $stage1Lib "stage1-lib"
+          Show-TreeStats "stage2 lib" $stage2Lib "stage2-lib"
           Show-TreeStats "snapshot lib" $snapshotLib "snapshot-lib"
 
           @(
             "hostTriple=$hostTriple"
-            "stage1Lib=$stage1Lib"
+            "stage2Lib=$stage2Lib"
             "snapshotLib=$snapshotLib"
           ) | Set-Content -Path (Join-Path $reportDir "paths.txt")
 
@@ -534,7 +534,7 @@ jobs:
         shell: pwsh
         run: |
           $hostTriple = "${{ matrix.host_triple }}"
-          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage1-$hostTriple"
+          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage2-$hostTriple"
           $snapshotRustc = (rustup which rustc).Trim()
           $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
           function Invoke-TimedBlock([string]$label, [scriptblock]$block) {
@@ -554,7 +554,7 @@ jobs:
               if (-not $relativePath) {
                 continue
               }
-              $skipKnown = $sourceDir -like '*\stage1\lib' -and (
+              $skipKnown = $sourceDir -like '*\stage2\lib' -and (
                 $relativePath -eq 'rustlib\src' -or
                 $relativePath -like 'rustlib\src\*' -or
                 $relativePath -eq 'rustlib\rustc-src' -or
@@ -610,18 +610,18 @@ jobs:
           Invoke-TimedBlock "copy bootstrap rustc" {
             Copy-Item "build/bootstrap/debug/rustc.exe" (Join-Path $toolchainDir "bin/rustc-bootstrap.exe")
           }
-          Invoke-TimedBlock "copy stage1 rustc" {
-            Copy-Item "build/$hostTriple/stage1/bin/rustc.exe" (Join-Path $toolchainDir "bin/rustc-real.exe")
+          Invoke-TimedBlock "copy stage2 rustc" {
+            Copy-Item "build/$hostTriple/stage2/bin/rustc.exe" (Join-Path $toolchainDir "bin/rustc-real.exe")
           }
-          Invoke-TimedBlock "copy stage1 cargo" {
-            Copy-Item "build/$hostTriple/stage1-tools-bin/cargo.exe" (Join-Path $toolchainDir "bin/cargo-real.exe")
+          Invoke-TimedBlock "copy stage2 cargo" {
+            Copy-Item "build/$hostTriple/stage2-tools-bin/cargo.exe" (Join-Path $toolchainDir "bin/cargo-real.exe")
           }
           Invoke-TimedBlock "copy snapshot rustc" {
             Copy-Item $snapshotRustc (Join-Path $toolchainDir "snapshot/bin/rustc.exe")
           }
-          Show-ReparsePoints "build/$hostTriple/stage1/lib"
-          Invoke-TimedBlock "copy stage1 lib" {
-            Copy-FilteredTree "stage1 lib" "build/$hostTriple/stage1/lib" (Join-Path $toolchainDir "lib")
+          Show-ReparsePoints "build/$hostTriple/stage2/lib"
+          Invoke-TimedBlock "copy stage2 lib" {
+            Copy-FilteredTree "stage2 lib" "build/$hostTriple/stage2/lib" (Join-Path $toolchainDir "lib")
           }
           Invoke-TimedBlock "copy snapshot lib" {
             Copy-FilteredTree "snapshot lib" (Join-Path $snapshotSysroot "lib") (Join-Path $toolchainDir "snapshot/lib")
@@ -644,7 +644,7 @@ jobs:
           $toolchainToml = @"
           host_triple = "$hostTriple"
           target_triple = "tc32-unknown-none-elf"
-          channel = "stage1-local"
+          channel = "stage2-local"
 
           [paths]
           cargo = "bin/cargo.cmd"
@@ -717,7 +717,7 @@ jobs:
           name: tc32-rust-toolchain-${{ matrix.host }}
           if-no-files-found: error
           compression-level: 0
-          path: tc32-stage1-${{ matrix.host_triple }}
+          path: tc32-stage2-${{ matrix.host_triple }}
 
       - name: Upload packaging report artifact (Windows)
         if: matrix.is_windows
@@ -757,14 +757,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tc32-rust-toolchain-windows-amd64
-          path: release-artifacts/tc32-stage1-x86_64-pc-windows-msvc
+          path: release-artifacts/tc32-stage2-x86_64-pc-windows-msvc
 
       - name: Write release notes
         shell: bash
         run: |
           set -euo pipefail
           cat > release-notes.md <<EOF
-          TC32 Rust stage1 host toolchain prerelease for \`${{ github.ref_name }}\`.
+          TC32 Rust stage2 host toolchain prerelease for \`${{ github.ref_name }}\`.
 
           Source commit: \`${{ github.sha }}\`
           Rust workflow run: \`${{ github.run_id }}\`
@@ -781,7 +781,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          WINDOWS_DIR="$GITHUB_WORKSPACE/release-artifacts/tc32-stage1-x86_64-pc-windows-msvc"
+          WINDOWS_DIR="$GITHUB_WORKSPACE/release-artifacts/tc32-stage2-x86_64-pc-windows-msvc"
           if [ -d "$WINDOWS_DIR" ]; then
             (
               cd "$GITHUB_WORKSPACE/release-artifacts"
@@ -796,8 +796,8 @@ jobs:
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: tc32-stage1-${{ github.ref_name }}-${{ github.run_number }}
-          name: TC32 Rust stage1 ${{ github.ref_name }} #${{ github.run_number }}
+          tag_name: tc32-stage2-${{ github.ref_name }}-${{ github.run_number }}
+          name: TC32 Rust stage2 ${{ github.ref_name }} #${{ github.run_number }}
           prerelease: true
           generate_release_notes: false
           body_path: release-notes.md
