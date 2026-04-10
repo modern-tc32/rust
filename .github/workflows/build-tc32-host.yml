@@ -73,6 +73,10 @@ jobs:
             runs_on: ubuntu-latest
             host_triple: x86_64-unknown-linux-gnu
             is_windows: false
+          - host: macos-amd64
+            runs_on: macos-15-intel
+            host_triple: x86_64-apple-darwin
+            is_windows: false
           - host: macos-arm64
             runs_on: macos-14
             host_triple: aarch64-apple-darwin
@@ -743,6 +747,12 @@ jobs:
           name: tc32-rust-toolchain-macos-arm64
           path: release-artifacts
 
+      - name: Download macOS amd64 standalone toolchain artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tc32-rust-toolchain-macos-amd64
+          path: release-artifacts
+
       - name: Download Windows standalone toolchain artifact
         uses: actions/download-artifact@v4
         with:
@@ -762,6 +772,7 @@ jobs:
 
           Included host artifacts:
           - linux-amd64
+          - macos-amd64
           - macos-arm64
           - windows-amd64
           EOF
