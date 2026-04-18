@@ -233,6 +233,22 @@ fn main() {
         println!("cargo:rustc-cfg=llvm_component=\"{component}\"");
     }
 
+    // When rustc_llvm links against an externally built LLVM, Cargo otherwise
+    // has no visibility into those library timestamps. Track the concrete
+    // library files reported by llvm-config so rebuilding LLVM invalidates the
+    // rustc_llvm link step automatically.
+    let (_, llvm_link_arg) = detect_llvm_link();
+    let mut cmd = Command::new(&llvm_config);
+    cmd.arg(llvm_link_arg).arg("--libfiles");
+    cmd.args(&components);
+    let llvm_libfiles = quoted_split(cmd);
+    for lib in &llvm_libfiles {
+        let path = Path::new(&*lib);
+        if path.exists() {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+
     // Link in our own LLVM shims, compiled with the same flags as LLVM
     let mut cmd = Command::new(&llvm_config);
     cmd.arg("--cxxflags");
