@@ -312,6 +312,7 @@ jobs:
           test ! -L "$TOOLCHAIN_DIR/lib/rustlib/rustc-src/rust"
           "$TOOLCHAIN_DIR/bin/rustc" -vV >/dev/null
           "$TOOLCHAIN_DIR/bin/cargo" -V >/dev/null
+          "$TOOLCHAIN_DIR/bin/rustc" --print target-list | grep -Fx tc32-unknown-none-elf
           "$TOOLCHAIN_DIR/bin/rustc" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
 
       - name: Inspect standalone toolchain inputs (Windows)
@@ -577,32 +578,29 @@ jobs:
 
           $rustcCmd = @"
           @echo off
-          setlocal EnableDelayedExpansion
+          setlocal
           set "ROOT=%~dp0.."
-          set "ARGS=%*"
-          set "TARGET_ARG="
-          set "VERSION_QUERY=0"
+          set "HAVE_SYSROOT=0"
           :scan
           if "%~1"=="" goto scanned
-          if "%~1"=="-vV" set "VERSION_QUERY=1"
-          if "%~1"=="--target" (
-            set "TARGET_ARG=%~2"
-            shift
-          ) else (
-            set "ARG1=%~1"
-            if /I "!ARG1:~0,9!"=="--target=" set "TARGET_ARG=!ARG1:~9!"
+          if "%~1"=="--sysroot" (
+            set "HAVE_SYSROOT=1"
+            goto scanned
+          )
+          set "ARG1=%~1"
+          if /I "%ARG1:~0,10%"=="--sysroot=" (
+            set "HAVE_SYSROOT=1"
+            goto scanned
           )
           shift
           goto scan
           :scanned
-          if defined TARGET_ARG goto target_mode
-          if "%VERSION_QUERY%"=="1" goto target_mode
-          set "PATH=%ROOT%\snapshot\lib;%PATH%"
-          "%ROOT%\snapshot\bin\rustc.exe" %ARGS%
-          exit /b %ERRORLEVEL%
-          :target_mode
           set "PATH=%ROOT%\lib;%PATH%"
-          "%ROOT%\bin\rustc-real.exe" %ARGS% --sysroot "%ROOT%"
+          if "%HAVE_SYSROOT%"=="1" goto run
+          "%ROOT%\bin\rustc-real.exe" %* --sysroot "%ROOT%"
+          exit /b %ERRORLEVEL%
+          :run
+          "%ROOT%\bin\rustc-real.exe" %*
           exit /b %ERRORLEVEL%
           "@
           Set-Content -Path (Join-Path $toolchainDir "bin/rustc.cmd") -Value $rustcCmd
@@ -640,6 +638,10 @@ jobs:
           }
           & (Join-Path $toolchainDir "bin/rustc.cmd") -vV | Out-Null
           & (Join-Path $toolchainDir "bin/cargo.cmd") -V | Out-Null
+          $targets = & (Join-Path $toolchainDir "bin/rustc.cmd") --print target-list
+          if (-not ($targets | Select-String -Pattern '^tc32-unknown-none-elf$')) {
+            throw "Packaged toolchain rustc does not report tc32 target in target-list"
+          }
           $cfg = & (Join-Path $toolchainDir "bin/rustc.cmd") --print cfg --target tc32-unknown-none-elf
           if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
             throw "Packaged toolchain rustc does not report tc32 target cfg"

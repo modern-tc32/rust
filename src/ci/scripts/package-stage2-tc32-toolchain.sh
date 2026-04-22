@@ -147,64 +147,26 @@ host_dylib_var() {
     esac
 }
 
-has_flag() {
-    flag=$1
-    shift
-    for arg in "$@"; do
-        if [ "$arg" = "$flag" ]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-value_for_flag() {
-    flag=$1
-    shift
-    prev=
-    for arg in "$@"; do
-        if [ "$prev" = "$flag" ]; then
-            printf '%s\n' "$arg"
-            return 0
-        fi
-        case "$arg" in
-            "$flag="*)
-                printf '%s\n' "${arg#*=}"
-                return 0
-                ;;
-        esac
-        prev=$arg
-    done
-    return 1
-}
-
-version_query=0
-if has_flag "-vV" "$@"; then
-    version_query=1
-fi
-
-target=
-if target=$(value_for_flag "--target" "$@"); then
-    :
-else
-    target=
-fi
-
-is_build_script=0
-if [ -z "$target" ] && [ "$version_query" -eq 0 ]; then
-    is_build_script=1
-fi
-
-if [ "$is_build_script" -eq 1 ]; then
-    compiler="$root/snapshot/bin/rustc"
-    libdir="$root/snapshot/lib"
-    set -- "$@"
-else
-    compiler="$root/bin/rustc-real"
-    libdir="$root/lib"
-    if [ -n "$target" ] && ! has_flag "--sysroot" "$@"; then
-        set -- "$@" --sysroot "$root"
+has_sysroot=0
+prev=
+for arg in "$@"; do
+    if [ "$prev" = "--sysroot" ]; then
+        has_sysroot=1
+        break
     fi
+    case "$arg" in
+        --sysroot|--sysroot=*)
+            has_sysroot=1
+            break
+            ;;
+    esac
+    prev=$arg
+done
+
+compiler="$root/bin/rustc-real"
+libdir="$root/lib"
+if [ "$has_sysroot" -eq 0 ]; then
+    set -- "$@" --sysroot "$root"
 fi
 
 dylib_var=$(host_dylib_var)
