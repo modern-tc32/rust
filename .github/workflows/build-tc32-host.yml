@@ -246,13 +246,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 x.py build --stage 2 compiler/rustc src/tools/cargo
+          python3 x.py build --stage 2 compiler/rustc src/tools/cargo library/std --target tc32-unknown-none-elf
 
       - name: Build stage2 Rust host toolchain (Windows)
         if: matrix.is_windows
         shell: pwsh
         run: |
-          python x.py build --stage 2 compiler/rustc src/tools/cargo
+          python x.py build --stage 2 compiler/rustc src/tools/cargo library/std --target tc32-unknown-none-elf
 
       - name: Verify stage2 rustc (Unix)
         if: ${{ !matrix.is_windows }}
@@ -288,146 +288,31 @@ jobs:
           TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage2-$HOST_TRIPLE"
           SNAPSHOT_RUSTC="$(rustup which rustc)"
           SNAPSHOT_SYSROOT="$("$SNAPSHOT_RUSTC" --print sysroot)"
-          rm -rf "$TOOLCHAIN_DIR"
-          mkdir -p \
-            "$TOOLCHAIN_DIR/bin" \
-            "$TOOLCHAIN_DIR/lib" \
-            "$TOOLCHAIN_DIR/llvm/bin" \
-            "$TOOLCHAIN_DIR/llvm/lib" \
-            "$TOOLCHAIN_DIR/snapshot/bin" \
-            "$TOOLCHAIN_DIR/snapshot/lib"
-
-          cp "build/bootstrap/debug/rustc" "$TOOLCHAIN_DIR/bin/rustc-bootstrap"
-          cp "build/$HOST_TRIPLE/stage2/bin/rustc" "$TOOLCHAIN_DIR/bin/rustc-real"
-          cp "build/$HOST_TRIPLE/stage2-tools-bin/cargo" "$TOOLCHAIN_DIR/bin/cargo-real"
-          cp "$SNAPSHOT_RUSTC" "$TOOLCHAIN_DIR/snapshot/bin/rustc"
-          cp -R "build/$HOST_TRIPLE/stage2/lib/." "$TOOLCHAIN_DIR/lib/"
-          cp -R "$SNAPSHOT_SYSROOT/lib/." "$TOOLCHAIN_DIR/snapshot/lib/"
-          cp -R "$GITHUB_WORKSPACE/llvm-toolchain/bin/." "$TOOLCHAIN_DIR/llvm/bin/"
-          if [ -d "$GITHUB_WORKSPACE/llvm-toolchain/lib/clang" ]; then
-            cp -R "$GITHUB_WORKSPACE/llvm-toolchain/lib/clang" "$TOOLCHAIN_DIR/llvm/lib/"
-          fi
-
-          cat > "$TOOLCHAIN_DIR/toolchain.toml" <<EOF
-          host_triple = "$HOST_TRIPLE"
-          target_triple = "tc32-unknown-none-elf"
-          channel = "stage2-local"
-
-          [paths]
-          cargo = "bin/cargo"
-          rustc = "bin/rustc"
-          real_rustc = "bin/rustc-real"
-          bootstrap_rustc = "bin/rustc-bootstrap"
-          snapshot_rustc = "snapshot/bin/rustc"
-          sysroot = "."
-          llvm_bin = "llvm/bin"
-          EOF
-
-          cat > "$TOOLCHAIN_DIR/bin/rustc" <<'EOF'
-          #!/bin/sh
-          set -eu
-
-          root=$(
-              CDPATH= cd -- "$(dirname "$0")/.." && pwd
-          )
-
-          host_dylib_var() {
-              case "$(uname -s)" in
-                  Darwin) printf '%s\n' DYLD_FALLBACK_LIBRARY_PATH ;;
-                  Linux) printf '%s\n' LD_LIBRARY_PATH ;;
-                  *) printf '%s\n' LD_LIBRARY_PATH ;;
-              esac
-          }
-
-          has_flag() {
-              flag=$1
-              shift
-              for arg in "$@"; do
-                  if [ "$arg" = "$flag" ]; then
-                      return 0
-                  fi
-              done
-              return 1
-          }
-
-          value_for_flag() {
-              flag=$1
-              shift
-              prev=
-              for arg in "$@"; do
-                  if [ "$prev" = "$flag" ]; then
-                      printf '%s\n' "$arg"
-                      return 0
-                  fi
-                  case "$arg" in
-                      "$flag="*)
-                          printf '%s\n' "${arg#*=}"
-                          return 0
-                          ;;
-                  esac
-                  prev=$arg
-              done
-              return 1
-          }
-
-          version_query=0
-          if has_flag "-vV" "$@"; then
-              version_query=1
-          fi
-
-          target=
-          if target=$(value_for_flag "--target" "$@"); then
-              :
-          else
-              target=
-          fi
-
-          is_build_script=0
-          if [ -z "$target" ] && [ "$version_query" -eq 0 ]; then
-              is_build_script=1
-          fi
-
-          if [ "$is_build_script" -eq 1 ]; then
-              compiler="$root/snapshot/bin/rustc"
-              libdir="$root/snapshot/lib"
-              set -- "$@"
-          else
-              compiler="$root/bin/rustc-real"
-              libdir="$root/lib"
-              if [ -n "$target" ] && ! has_flag "--sysroot" "$@"; then
-                  set -- "$@" --sysroot "$root"
-              fi
-          fi
-
-          dylib_var=$(host_dylib_var)
-          eval "old_dylib_path=\${$dylib_var-}"
-          if [ -n "${old_dylib_path:-}" ]; then
-              new_dylib_path="$libdir:$old_dylib_path"
-          else
-              new_dylib_path="$libdir"
-          fi
-
-          env "$dylib_var=$new_dylib_path" "$compiler" "$@"
-          EOF
-
-          cat > "$TOOLCHAIN_DIR/bin/cargo" <<'EOF'
-          #!/bin/sh
-          set -eu
-
-          root=$(
-              CDPATH= cd -- "$(dirname "$0")/.." && pwd
-          )
-
-          export RUSTC="${RUSTC:-$root/bin/rustc}"
-          export TC32_LLVM_BIN="${TC32_LLVM_BIN:-$root/llvm/bin}"
-          export CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER="${CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER:-$root/llvm/bin/ld.lld}"
-
-          exec "$root/bin/cargo-real" "$@"
-          EOF
-
-          chmod +x "$TOOLCHAIN_DIR/bin/rustc" "$TOOLCHAIN_DIR/bin/cargo"
+          HOST_TRIPLE="$HOST_TRIPLE" \
+          RUST_BUILD_DIR="$GITHUB_WORKSPACE/build" \
+          LLVM_TOOLCHAIN_DIR="$GITHUB_WORKSPACE/llvm-toolchain" \
+          TOOLCHAIN_OUTPUT_DIR="$GITHUB_WORKSPACE" \
+          RUST_SOURCE_DIR="$GITHUB_WORKSPACE" \
+          BOOTSTRAP_RUSTC="$GITHUB_WORKSPACE/build/bootstrap/debug/rustc" \
+          SNAPSHOT_RUSTC="$SNAPSHOT_RUSTC" \
+          SNAPSHOT_SYSROOT="$SNAPSHOT_SYSROOT" \
+          src/ci/scripts/package-stage2-tc32-toolchain.sh
           tar -czf "$GITHUB_WORKSPACE/tc32-rust-toolchain-${{ matrix.host }}.tar.gz" \
             -C "$GITHUB_WORKSPACE" "$(basename "$TOOLCHAIN_DIR")"
+
+      - name: Verify packaged standalone toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage2-${{ matrix.host_triple }}"
+          test -d "$TOOLCHAIN_DIR/lib/rustlib/tc32-unknown-none-elf/lib"
+          test -x "$TOOLCHAIN_DIR/lib/rustlib/${{ matrix.host_triple }}/bin/rust-objcopy"
+          test ! -L "$TOOLCHAIN_DIR/lib/rustlib/src/rust"
+          test ! -L "$TOOLCHAIN_DIR/lib/rustlib/rustc-src/rust"
+          "$TOOLCHAIN_DIR/bin/rustc" -vV >/dev/null
+          "$TOOLCHAIN_DIR/bin/cargo" -V >/dev/null
+          "$TOOLCHAIN_DIR/bin/rustc" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
 
       - name: Inspect standalone toolchain inputs (Windows)
         if: matrix.is_windows
@@ -598,6 +483,32 @@ jobs:
               Format-Table -AutoSize | Out-String -Width 4096 |
               Write-Host
           }
+          function Materialize-RustSource([string]$repoDir, [string]$destDir) {
+            Remove-Item -Recurse -Force $destDir -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            $archivePath = Join-Path $env:RUNNER_TEMP ("rust-src-" + [guid]::NewGuid().ToString() + ".tar")
+            try {
+              git -C $repoDir archive --format=tar HEAD -o $archivePath
+              tar -xf $archivePath -C $destDir
+            } finally {
+              Remove-Item -Force $archivePath -ErrorAction SilentlyContinue
+            }
+          }
+          function Copy-RustObjcopy([string]$hostTriple, [string]$toolchainDir) {
+            $candidatePaths = @(
+              (Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage2/lib/rustlib/$hostTriple/bin/rust-objcopy.exe"),
+              (Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage0/lib/rustlib/$hostTriple/bin/rust-objcopy.exe")
+            )
+            $targetDir = Join-Path $toolchainDir "lib/rustlib/$hostTriple/bin"
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            foreach ($candidate in $candidatePaths) {
+              if (Test-Path $candidate) {
+                Copy-Item $candidate (Join-Path $targetDir "rust-objcopy.exe") -Force
+                return
+              }
+            }
+            throw "Missing rust-objcopy.exe in stage2/stage0 rustlib bin"
+          }
           Remove-Item -Recurse -Force $toolchainDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path `
             (Join-Path $toolchainDir "bin"), `
@@ -622,6 +533,13 @@ jobs:
           Show-ReparsePoints "build/$hostTriple/stage2/lib"
           Invoke-TimedBlock "copy stage2 lib" {
             Copy-FilteredTree "stage2 lib" "build/$hostTriple/stage2/lib" (Join-Path $toolchainDir "lib")
+          }
+          Invoke-TimedBlock "copy rust-objcopy" {
+            Copy-RustObjcopy $hostTriple $toolchainDir
+          }
+          Invoke-TimedBlock "materialize rust sources" {
+            Materialize-RustSource $env:GITHUB_WORKSPACE (Join-Path $toolchainDir "lib/rustlib/src/rust")
+            Materialize-RustSource $env:GITHUB_WORKSPACE (Join-Path $toolchainDir "lib/rustlib/rustc-src/rust")
           }
           Invoke-TimedBlock "copy snapshot lib" {
             Copy-FilteredTree "snapshot lib" (Join-Path $snapshotSysroot "lib") (Join-Path $toolchainDir "snapshot/lib")
@@ -699,6 +617,33 @@ jobs:
           "%ROOT%\bin\cargo-real.exe" %*
           "@
           Set-Content -Path (Join-Path $toolchainDir "bin/cargo.cmd") -Value $cargoCmd
+
+      - name: Verify packaged standalone toolchain (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage2-${{ matrix.host_triple }}"
+          if (-not (Test-Path (Join-Path $toolchainDir "lib/rustlib/tc32-unknown-none-elf/lib"))) {
+            throw "Missing tc32 target sysroot in packaged toolchain"
+          }
+          if (-not (Test-Path (Join-Path $toolchainDir "lib/rustlib/${{ matrix.host_triple }}/bin/rust-objcopy.exe"))) {
+            throw "Missing rust-objcopy in packaged toolchain"
+          }
+          foreach ($path in @(
+            (Join-Path $toolchainDir "lib/rustlib/src/rust"),
+            (Join-Path $toolchainDir "lib/rustlib/rustc-src/rust")
+          )) {
+            $item = Get-Item -LiteralPath $path -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              throw "Unexpected reparse point in packaged rust sources: $path"
+            }
+          }
+          & (Join-Path $toolchainDir "bin/rustc.cmd") -vV | Out-Null
+          & (Join-Path $toolchainDir "bin/cargo.cmd") -V | Out-Null
+          $cfg = & (Join-Path $toolchainDir "bin/rustc.cmd") --print cfg --target tc32-unknown-none-elf
+          if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
+            throw "Packaged toolchain rustc does not report tc32 target cfg"
+          }
 
       - name: Upload standalone toolchain artifact (Unix)
         if: ${{ !matrix.is_windows }}
