@@ -29,6 +29,7 @@ pub(crate) fn target() -> Target {
             features: "+strict-align".into(),
             atomic_cas: false,
             max_atomic_width: Some(32),
+            singlethread: true,
             c_enum_min_bits: Some(8),
             ..Default::default()
         },

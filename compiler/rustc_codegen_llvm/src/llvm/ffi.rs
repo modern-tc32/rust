@@ -1593,6 +1593,8 @@ unsafe extern "C" {
         Name: *const c_char,
     ) -> &'a Value;
 
+    pub(crate) fn LLVMSetAtomicSingleThread(AtomicInst: &Value, SingleThreaded: Bool);
+
     /// Writes a module to the specified path. Returns 0 on success.
     pub(crate) fn LLVMWriteBitcodeToFile(M: &Module, Path: *const c_char) -> c_int;
 
