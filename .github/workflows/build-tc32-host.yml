@@ -27,17 +27,16 @@ concurrency:
 
 env:
   LLVM_REPOSITORY: modern-tc32/llvm-project
-  LLVM_WORKFLOW_FILE: build-tc32-toolchain.yml
-  LLVM_BRANCH: tc32-as-thumb-extension
+  LLVM_VERSION: "23"
 
 jobs:
-  resolve-llvm-run:
-    name: Resolve LLVM artifact source
+  resolve-llvm-release:
+    name: Resolve LLVM release
     runs-on: ubuntu-latest
     outputs:
-      run_id: ${{ steps.resolve.outputs.run_id }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - name: Resolve latest successful LLVM workflow run
+      - name: Resolve latest LLVM release with Rust artifacts
         id: resolve
         shell: bash
         env:
@@ -48,21 +47,63 @@ jobs:
             echo "LLVM_REPO_READ_TOKEN is not set" >&2
             exit 1
           fi
-          API_URL="https://api.github.com/repos/$LLVM_REPOSITORY/actions/workflows/$LLVM_WORKFLOW_FILE/runs?branch=$LLVM_BRANCH&status=success&per_page=1"
-          RESPONSE="$(curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$API_URL")"
-          RUN_ID="$(python3 -c 'import json,sys; data=json.load(sys.stdin); runs=data.get("workflow_runs", []); print(runs[0]["id"] if runs else "")' <<<"$RESPONSE")"
-          if [ -z "$RUN_ID" ]; then
-            echo "No successful LLVM workflow run found for $LLVM_REPOSITORY:$LLVM_BRANCH ($LLVM_WORKFLOW_FILE)" >&2
-            exit 1
-          fi
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          TAG="$(python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ["LLVM_REPOSITORY"]
+          version = os.environ["LLVM_VERSION"]
+          token = os.environ["TOKEN"]
+          required_assets = {
+              "tc32-llvm-rust-llvm-linux-amd64.tar.gz",
+              "tc32-llvm-rust-llvm-macos-amd64.tar.gz",
+              "tc32-llvm-rust-llvm-macos-arm64.tar.gz",
+              "tc32-llvm-rust-llvm-windows-amd64.zip",
+          }
+          candidates = []
+          page = 1
+
+          while True:
+              url = f"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
+              request = urllib.request.Request(url, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urllib.request.urlopen(request) as response:
+                  releases = json.load(response)
+              if not releases:
+                  break
+
+              for release in releases:
+                  tag = release.get("tag_name", "")
+                  asset_names = {asset.get("name") for asset in release.get("assets", [])}
+                  if (
+                      not release.get("draft")
+                      and release.get("published_at")
+                      and tag.startswith(f"{version}.")
+                      and required_assets <= asset_names
+                  ):
+                      candidates.append(release)
+
+              if len(releases) < 100:
+                  break
+              page += 1
+
+          if not candidates:
+              raise SystemExit(
+                  f"No LLVM {version}.x release found in {repository} with all Rust host assets"
+              )
+
+          latest = max(candidates, key=lambda release: release["published_at"])
+          print(latest["tag_name"])
+          PY
+          )"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   build-host:
-    needs: resolve-llvm-run
+    needs: resolve-llvm-release
     name: ${{ matrix.host }}
     runs-on: ${{ matrix.runs_on }}
     strategy:
@@ -137,14 +178,36 @@ jobs:
         run: |
           git submodule update --init --depth 1 src/tools/cargo
 
-      - name: Download LLVM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tc32-llvm-rust-llvm-${{ matrix.host }}
-          repository: ${{ env.LLVM_REPOSITORY }}
-          run-id: ${{ needs.resolve-llvm-run.outputs.run_id }}
-          github-token: ${{ secrets.LLVM_REPO_READ_TOKEN }}
-          path: llvm-artifact
+      - name: Download LLVM release asset (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.LLVM_REPO_READ_TOKEN }}
+          LLVM_RELEASE_TAG: ${{ needs.resolve-llvm-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p llvm-artifact
+          ASSET="tc32-llvm-rust-llvm-${{ matrix.host }}.tar.gz"
+          URL="https://github.com/$LLVM_REPOSITORY/releases/download/$LLVM_RELEASE_TAG/$ASSET"
+          curl --fail --location --retry 3 \
+            -H "Authorization: Bearer $TOKEN" \
+            "$URL" \
+            -o "llvm-artifact/$ASSET"
+
+      - name: Download LLVM release asset (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.LLVM_REPO_READ_TOKEN }}
+          LLVM_RELEASE_TAG: ${{ needs.resolve-llvm-release.outputs.tag }}
+        run: |
+          $asset = "tc32-llvm-rust-llvm-${{ matrix.host }}.zip"
+          $url = "https://github.com/$env:LLVM_REPOSITORY/releases/download/$env:LLVM_RELEASE_TAG/$asset"
+          $destination = Join-Path $env:GITHUB_WORKSPACE "llvm-artifact/$asset"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+          curl.exe --fail --location --retry 3 `
+            --header "Authorization: Bearer $env:TOKEN" `
+            $url --output $destination
 
       - name: Unpack LLVM artifact (Unix)
         if: ${{ !matrix.is_windows }}
@@ -649,7 +712,7 @@ jobs:
 
       - name: Upload standalone toolchain artifact (Unix)
         if: ${{ !matrix.is_windows }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tc32-rust-toolchain-${{ matrix.host }}
           if-no-files-found: error
@@ -659,7 +722,7 @@ jobs:
 
       - name: Upload standalone toolchain artifact (Windows)
         if: matrix.is_windows
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tc32-rust-toolchain-${{ matrix.host }}
           if-no-files-found: error
@@ -668,7 +731,7 @@ jobs:
 
       - name: Upload packaging report artifact (Windows)
         if: matrix.is_windows
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tc32-windows-packaging-report-${{ matrix.host }}
           if-no-files-found: error
@@ -676,32 +739,32 @@ jobs:
 
   publish-prerelease:
     needs:
-      - resolve-llvm-run
+      - resolve-llvm-release
       - build-host
     if: github.event_name != 'pull_request'
     name: Publish prerelease
     runs-on: ubuntu-latest
     steps:
       - name: Download Linux standalone toolchain artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tc32-rust-toolchain-linux-amd64
           path: release-artifacts
 
       - name: Download macOS standalone toolchain artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tc32-rust-toolchain-macos-arm64
           path: release-artifacts
 
       - name: Download macOS amd64 standalone toolchain artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tc32-rust-toolchain-macos-amd64
           path: release-artifacts
 
       - name: Download Windows standalone toolchain artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tc32-rust-toolchain-windows-amd64
           path: release-artifacts/tc32-stage2-x86_64-pc-windows-msvc
@@ -715,7 +778,7 @@ jobs:
 
           Source commit: \`${{ github.sha }}\`
           Rust workflow run: \`${{ github.run_id }}\`
-          LLVM workflow run: \`${{ needs.resolve-llvm-run.outputs.run_id }}\`
+          LLVM release: \`${{ needs.resolve-llvm-release.outputs.tag }}\`
 
           Included host artifacts:
           - linux-amd64
