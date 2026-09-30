@@ -281,6 +281,8 @@ pub(crate) fn to_llvm_features<'a>(sess: &Session, s: &'a str) -> Option<LLVMFea
                 "bmi1" => Some(LLVMFeature::new("bmi")),
                 "cmpxchg16b" => Some(LLVMFeature::new("cx16")),
                 "lahfsahf" => Some(LLVMFeature::new("sahf")),
+                // AMX-TF32 was removed from LLVM 23.
+                "amx-tf32" if major >= 23 => None,
                 // Enable the evex512 target feature if an avx512 target feature is enabled.
                 s if s.starts_with("avx512") && major < 22 => Some(LLVMFeature::with_dependencies(
                     s,
