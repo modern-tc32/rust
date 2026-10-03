@@ -745,6 +745,24 @@ jobs:
     name: Publish prerelease
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Rust version
+        uses: actions/checkout@v5
+
+      - name: Compute release metadata
+        id: release-metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < src/version)"
+          SHA6="${GITHUB_SHA:0:6}"
+          RELEASE_DATE="$(date -u +%Y-%m-%d)"
+          RELEASE_DATE_COMPACT="${RELEASE_DATE//-/}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha6=$SHA6" >> "$GITHUB_OUTPUT"
+          echo "date=$RELEASE_DATE" >> "$GITHUB_OUTPUT"
+          echo "tag=tc32-$VERSION-$RELEASE_DATE_COMPACT-$SHA6" >> "$GITHUB_OUTPUT"
+
       - name: Download Linux standalone toolchain artifact
         uses: actions/download-artifact@v8
         with:
@@ -774,9 +792,11 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<EOF
-          TC32 Rust stage2 host toolchain prerelease for \`${{ github.ref_name }}\`.
+          Rust TC32 ${{ steps.release-metadata.outputs.version }} (${{ steps.release-metadata.outputs.sha6 }}) ${{ steps.release-metadata.outputs.date }}
 
           Source commit: \`${{ github.sha }}\`
+          Rust version: \`${{ steps.release-metadata.outputs.version }}\`
+          Release date (UTC): \`${{ steps.release-metadata.outputs.date }}\`
           Rust workflow run: \`${{ github.run_id }}\`
           LLVM release: \`${{ needs.resolve-llvm-release.outputs.tag }}\`
 
@@ -806,8 +826,8 @@ jobs:
       - name: Publish GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: tc32-stage2-${{ github.ref_name }}-${{ github.run_number }}
-          name: TC32 Rust stage2 ${{ github.ref_name }} #${{ github.run_number }}
+          tag_name: ${{ steps.release-metadata.outputs.tag }}
+          name: Rust TC32 ${{ steps.release-metadata.outputs.version }} (${{ steps.release-metadata.outputs.sha6 }}) ${{ steps.release-metadata.outputs.date }}
           prerelease: true
           generate_release_notes: false
           body_path: release-notes.md
