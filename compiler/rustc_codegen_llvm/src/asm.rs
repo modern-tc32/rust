@@ -23,6 +23,75 @@ use crate::llvm::{self, ToLlvmBool, Type, Value};
 use crate::type_of::LayoutLlvmExt;
 use crate::{attributes, llvm_util};
 
+/// Whether an operand list mentions a register outside r0-r7 (or sp/lr/pc).
+fn tc32_uses_high_regs(args: &str) -> bool {
+    args.split(|c: char| c.is_ascii_whitespace() || matches!(c, ',' | ';' | '[' | ']' | '{' | '}'))
+        .any(|token| {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "r8" | "r9" | "r10" | "r11" | "r12" | "sp" | "lr" | "pc"
+            )
+        })
+}
+
+/// Rewrites a single statement (no labels, comments or `;` separators).
+///
+/// LLVM's TC32 asm parser already maps the vendor `t*` mnemonics to the Thumb-style ones, but
+/// `tadd` and `tmov` always become the flag-setting low-register forms there. Spell them as
+/// `add`/`mov` when a high register is involved, and leave everything else to LLVM.
+fn normalize_tc32_stmt(stmt: &str) -> String {
+    let trimmed = stmt.trim_start();
+    let (prefix, rest) = stmt.split_at(stmt.len() - trimmed.len());
+    let mnemonic_end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+    let (mnemonic, args) = rest.split_at(mnemonic_end);
+    let replacement = match mnemonic.to_ascii_lowercase().as_str() {
+        "tadd" if tc32_uses_high_regs(args) => "add",
+        "tmov" if tc32_uses_high_regs(args) => "mov",
+        _ => return stmt.to_string(),
+    };
+    format!("{prefix}{replacement}{args}")
+}
+
+/// Splits a leading run of `label:` definitions off a statement.
+fn split_tc32_labels(stmt: &str) -> (&str, &str) {
+    let mut end = 0;
+    loop {
+        let rest = stmt[end..].trim_start();
+        let skipped = stmt.len() - end - rest.len();
+        let name_len = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$')))
+            .unwrap_or(rest.len());
+        if name_len > 0 && rest[name_len..].starts_with(':') {
+            end += skipped + name_len + 1;
+        } else {
+            return stmt.split_at(end);
+        }
+    }
+}
+
+fn normalize_tc32_line(line: &str) -> String {
+    // Keep comments out of operand scanning (`@` and `//` are the ARM-style comment markers).
+    let comment_start = [line.find('@'), line.find("//")].into_iter().flatten().min();
+    let (code, comment) = line.split_at(comment_start.unwrap_or(line.len()));
+    let code = code
+        .split_inclusive(';')
+        .map(|stmt| {
+            let (labels, stmt) = split_tc32_labels(stmt);
+            format!("{labels}{}", normalize_tc32_stmt(stmt))
+        })
+        .collect::<String>();
+    format!("{code}{comment}")
+}
+
+fn normalize_tc32_asm(asm: &str) -> String {
+    let mut out = String::with_capacity(asm.len() + 16);
+    out.push_str(".code 16\n");
+    for line in asm.split_inclusive('\n') {
+        out.push_str(&normalize_tc32_line(line));
+    }
+    out
+}
+
 impl<'ll, 'tcx> AsmBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
     fn codegen_inline_asm(
         &mut self,
@@ -254,10 +323,17 @@ impl<'ll, 'tcx> AsmBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
             }
         }
 
+        if asm_arch == InlineAsmArch::Tc32 {
+            template_str = normalize_tc32_asm(&template_str);
+        }
+
         constraints.append(&mut clobbers);
         if !options.contains(InlineAsmOptions::PRESERVES_FLAGS) {
             match asm_arch {
-                InlineAsmArch::AArch64 | InlineAsmArch::Arm64EC | InlineAsmArch::Arm => {
+                InlineAsmArch::AArch64
+                | InlineAsmArch::Arm64EC
+                | InlineAsmArch::Arm
+                | InlineAsmArch::Tc32 => {
                     constraints.push("~{cc}".to_string());
                 }
                 InlineAsmArch::Amdgpu => {}
@@ -490,6 +566,10 @@ impl<'tcx> AsmCodegenMethods<'tcx> for CodegenCx<'_, 'tcx> {
                     }
                 }
             }
+        }
+
+        if asm_arch == InlineAsmArch::Tc32 {
+            template_str = normalize_tc32_asm(&template_str);
         }
 
         // Just to play it safe, if intel was used, reset the assembly syntax to att.

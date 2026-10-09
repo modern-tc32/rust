@@ -224,6 +224,7 @@ pub enum InlineAsmArch {
     X86,
     X86_64,
     Arm,
+    Tc32,
     AArch64,
     Arm64EC,
     RiscV32,
@@ -256,7 +257,8 @@ impl InlineAsmArch {
         match arch {
             Arch::X86 => Some(Self::X86),
             Arch::X86_64 => Some(Self::X86_64),
-            Arch::Arm | Arch::Tc32 => Some(Self::Arm),
+            Arch::Arm => Some(Self::Arm),
+            Arch::Tc32 => Some(Self::Tc32),
             Arch::Arm64EC => Some(Self::Arm64EC),
             Arch::AArch64 => Some(Self::AArch64),
             Arch::AmdGpu => Some(Self::Amdgpu),
@@ -367,7 +369,7 @@ impl InlineAsmReg {
         let name = name.as_str();
         Ok(match arch {
             InlineAsmArch::X86 | InlineAsmArch::X86_64 => Self::X86(X86InlineAsmReg::parse(name)?),
-            InlineAsmArch::Arm => Self::Arm(ArmInlineAsmReg::parse(name)?),
+            InlineAsmArch::Arm | InlineAsmArch::Tc32 => Self::Arm(ArmInlineAsmReg::parse(name)?),
             InlineAsmArch::AArch64 | InlineAsmArch::Arm64EC => {
                 Self::AArch64(AArch64InlineAsmReg::parse(name)?)
             }
@@ -676,7 +678,9 @@ impl InlineAsmRegClass {
             InlineAsmArch::X86 | InlineAsmArch::X86_64 => {
                 Self::X86(X86InlineAsmRegClass::parse(name)?)
             }
-            InlineAsmArch::Arm => Self::Arm(ArmInlineAsmRegClass::parse(name)?),
+            InlineAsmArch::Arm | InlineAsmArch::Tc32 => {
+                Self::Arm(ArmInlineAsmRegClass::parse(name)?)
+            }
             InlineAsmArch::AArch64 | InlineAsmArch::Arm64EC => {
                 Self::AArch64(AArch64InlineAsmRegClass::parse(name)?)
             }
@@ -872,9 +876,20 @@ pub fn allocatable_registers(
             x86::fill_reg_map(arch, reloc_model, target_features, target, &mut map);
             map
         }
-        InlineAsmArch::Arm => {
+        InlineAsmArch::Arm | InlineAsmArch::Tc32 => {
             let mut map = arm::regclass_map();
             arm::fill_reg_map(arch, reloc_model, target_features, target, &mut map);
+            if arch == InlineAsmArch::Tc32 {
+                // TC32 has no VFP/NEON register files, only the core registers.
+                use ArmInlineAsmRegClass::*;
+                for class in [
+                    sreg, sreg_low16, dreg, dreg_low16, dreg_low8, qreg, qreg_low8, qreg_low4,
+                ] {
+                    if let Some(regs) = map.get_mut(&InlineAsmRegClass::Arm(class)) {
+                        regs.clear();
+                    }
+                }
+            }
             map
         }
         InlineAsmArch::AArch64 | InlineAsmArch::Arm64EC => {
@@ -1016,7 +1031,7 @@ impl InlineAsmClobberAbi {
                 "sysv64" => Ok(InlineAsmClobberAbi::X86_64SysV),
                 _ => Err(&["C", "system", "efiapi", "win64", "sysv64"]),
             },
-            InlineAsmArch::Arm => match name {
+            InlineAsmArch::Arm | InlineAsmArch::Tc32 => match name {
                 "C" | "system" | "efiapi" | "aapcs" => Ok(InlineAsmClobberAbi::Arm),
                 _ => Err(&["C", "system", "efiapi", "aapcs"]),
             },
