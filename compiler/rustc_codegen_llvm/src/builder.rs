@@ -709,6 +709,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             let load = llvm::LLVMBuildLoad2(self.llbuilder, ty, ptr, UNNAMED);
             // Set atomic ordering
             llvm::LLVMSetOrdering(load, AtomicOrdering::from_generic(order));
+            if self.is_singlethread() {
+                llvm::LLVMSetAtomicSingleThread(load, llvm::TRUE);
+            }
             // LLVM requires the alignment of atomic loads to be at least the size of the type.
             llvm::LLVMSetAlignment(load, size.bytes() as c_uint);
             load
@@ -938,6 +941,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             let store = llvm::LLVMBuildStore(self.llbuilder, val, ptr);
             // Set atomic ordering
             llvm::LLVMSetOrdering(store, AtomicOrdering::from_generic(order));
+            if self.is_singlethread() {
+                llvm::LLVMSetAtomicSingleThread(store, llvm::TRUE);
+            }
             // LLVM requires the alignment of atomic stores to be at least the size of the type.
             llvm::LLVMSetAlignment(store, size.bytes() as c_uint);
         }
@@ -1382,7 +1388,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
                 src,
                 AtomicOrdering::from_generic(order),
                 AtomicOrdering::from_generic(failure_order),
-                llvm::FALSE, // SingleThreaded
+                self.is_singlethread().to_llvm_bool(),
             );
             llvm::LLVMSetWeak(value, weak.to_llvm_bool());
             let val = self.extract_value(value, 0);
@@ -1409,7 +1415,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
                 dst,
                 src,
                 AtomicOrdering::from_generic(order),
-                llvm::FALSE, // SingleThreaded
+                self.is_singlethread().to_llvm_bool(),
             )
         };
         if ret_ptr && self.val_ty(res) != self.type_ptr() {
@@ -1566,6 +1572,13 @@ impl<'ll> StaticBuilderMethods for Builder<'_, 'll, '_> {
 impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
     pub(crate) fn llfn(&self) -> &'ll Value {
         unsafe { llvm::LLVMGetBasicBlockParent(self.llbb()) }
+    }
+
+    /// Whether atomics should use the single-thread sync scope. Wasm with the `atomics` feature
+    /// is multi-threaded even if the target spec says otherwise, hence the target-feature lookup.
+    fn is_singlethread(&self) -> bool {
+        let sess = self.tcx.sess;
+        sess.target.singlethread(&sess.internal_target_features)
     }
 
     fn generate_ubsan_cfi_diag_data(
