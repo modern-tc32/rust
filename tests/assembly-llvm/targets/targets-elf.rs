@@ -400,6 +400,9 @@
 //@ revisions: mipsisa64r6el_unknown_linux_gnuabi64
 //@ [mipsisa64r6el_unknown_linux_gnuabi64] compile-flags: --target mipsisa64r6el-unknown-linux-gnuabi64
 //@ [mipsisa64r6el_unknown_linux_gnuabi64] needs-llvm-components: mips
+//@ revisions: tc32_unknown_none_elf
+//@ [tc32_unknown_none_elf] compile-flags: --target tc32-unknown-none-elf
+//@ [tc32_unknown_none_elf] needs-llvm-components: arm
 //@ revisions: msp430_none_elf
 //@ [msp430_none_elf] compile-flags: --target msp430-none-elf
 //@ [msp430_none_elf] needs-llvm-components: msp430

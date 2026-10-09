@@ -1106,7 +1106,7 @@ pub(super) fn emit_va_arg<'ll, 'tcx>(
             ForceRightAdjust::No,
         ),
         Arch::AArch64 => emit_aapcs_va_arg(bx, addr, target_ty),
-        Arch::Arm => {
+        Arch::Arm | Arch::Tc32 => {
             // Types wider than 16 bytes are not currently supported. Clang has special logic for
             // such types, but `VaArgSafe` is not implemented for any type that is this large on
             // arm (i.e. 32-bit) targets.
