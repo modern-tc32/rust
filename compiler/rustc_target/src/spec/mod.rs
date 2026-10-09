@@ -1661,6 +1661,7 @@ supported_targets! {
     ("thumbv8m.base-none-eabi", thumbv8m_base_none_eabi),
     ("thumbv8m.main-none-eabi", thumbv8m_main_none_eabi),
     ("thumbv8m.main-none-eabihf", thumbv8m_main_none_eabihf),
+    ("tc32-unknown-none-elf", tc32_unknown_none_elf),
 
     ("armv7a-none-eabi", armv7a_none_eabi),
     ("thumbv7a-none-eabi", thumbv7a_none_eabi),
@@ -1912,6 +1913,7 @@ crate::target_spec_enum! {
         Sparc = "sparc",
         Sparc64 = "sparc64",
         SpirV = "spirv",
+        Tc32 = "tc32",
         Wasm32 = "wasm32",
         Wasm64 = "wasm64",
         X86 = "x86",
@@ -1949,6 +1951,7 @@ impl Arch {
             Self::Sparc => sym::sparc,
             Self::Sparc64 => sym::sparc64,
             Self::SpirV => sym::spirv,
+            Self::Tc32 => sym::tc32,
             Self::Wasm32 => sym::wasm32,
             Self::Wasm64 => sym::wasm64,
             Self::X86 => sym::x86,
@@ -1966,8 +1969,8 @@ impl Arch {
             AArch64 | RiscV32 | RiscV64 => true,
             AmdGpu | Arm | Arm64EC | Avr | Bpf | CSky | Hexagon | LoongArch32 | LoongArch64
             | M68k | Mips | Mips32r6 | Mips64 | Mips64r6 | Msp430 | Nvptx64 | PowerPC
-            | PowerPC64 | S390x | Sparc | Sparc64 | SpirV | Wasm32 | Wasm64 | X86 | X86_64
-            | Xtensa | Other(_) => false,
+            | PowerPC64 | S390x | Sparc | Sparc64 | SpirV | Tc32 | Wasm32 | Wasm64 | X86
+            | X86_64 | Xtensa | Other(_) => false,
         }
     }
 }
@@ -2253,7 +2256,7 @@ impl Target {
 
             AArch64 | AmdGpu | Arm | Arm64EC | CSky | Hexagon | LoongArch32 | LoongArch64
             | Mips | Mips32r6 | Mips64 | Mips64r6 | Nvptx64 | PowerPC | PowerPC64 | RiscV32
-            | RiscV64 | S390x | Sparc64 | Wasm32 | Wasm64 | X86 | X86_64 | Xtensa => {
+            | RiscV64 | S390x | Sparc64 | Tc32 | Wasm32 | Wasm64 | X86 | X86_64 | Xtensa => {
                 CVariadicStatus::Stable
             }
         }
@@ -3436,6 +3439,23 @@ impl Target {
                     self.cfg_abi,
                 )
             }
+            Arch::Tc32 => {
+                check!(
+                    self.llvm_abiname == LlvmAbi::Unspecified,
+                    "`llvm_abiname` is unused on TC32"
+                );
+                check!(self.rustc_abi.is_none(), "`rustc_abi` is unused on TC32");
+                check_matches!(
+                    (&self.llvm_floatabi, &self.cfg_abi),
+                    (Some(FloatAbi::Hard), CfgAbi::Unspecified | CfgAbi::Other(_))
+                        | (Some(FloatAbi::Soft), CfgAbi::Unspecified | CfgAbi::Other(_)),
+                    "Invalid combination of float ABI and `cfg(target_abi)` for TC32 target\n\
+                     float ABI: {:?}\n\
+                     cfg(target_abi): {}",
+                    self.llvm_floatabi,
+                    self.cfg_abi,
+                )
+            }
             Arch::AArch64 => {
                 check_matches!(
                     self.llvm_abiname,
@@ -3840,7 +3860,7 @@ impl Target {
     ) -> Option<(object::Architecture, Option<object::SubArchitecture>)> {
         use object::Architecture;
         Some(match self.arch {
-            Arch::Arm => (Architecture::Arm, None),
+            Arch::Arm | Arch::Tc32 => (Architecture::Arm, None),
             Arch::AArch64 => (
                 if self.pointer_width == 32 {
                     Architecture::Aarch64_Ilp32

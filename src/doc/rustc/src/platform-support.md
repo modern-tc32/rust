@@ -427,6 +427,7 @@ target | std | host | notes
 [`sparc64-unknown-helenos`](platform-support/helenos.md) | ✓ |  | sparc64 HelenOS
 [`sparc64-unknown-netbsd`](platform-support/netbsd.md) | ✓ | ✓ | NetBSD/sparc64
 [`sparc64-unknown-openbsd`](platform-support/openbsd.md) | ✓ | ✓ | OpenBSD/sparc64
+[`tc32-unknown-none-elf`](platform-support/tc32-unknown-none-elf.md) | * |  | Bare-metal Telink TC32
 [`thumbv4t-none-eabi`](platform-support/armv4t-none-eabi.md) | * |  | Thumb-mode Bare Armv4T
 [`thumbv5te-none-eabi`](platform-support/armv5te-none-eabi.md) | * |  | Thumb-mode Bare Armv5TE
 [`thumbv6-none-eabi`](platform-support/armv6-none-eabi.md) | * | | Thumb-mode Bare Armv6

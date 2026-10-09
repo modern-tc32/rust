@@ -32,13 +32,20 @@ use crate::{Build, CLang, GitRepo};
 /// Creates and configures a new [`cc::Build`] instance for the given target.
 fn new_cc_build(build: &Build, target: TargetSelection) -> cc::Build {
     let mut cfg = cc::Build::new();
+    let cc_target = if target.triple == "tc32-unknown-none-elf" {
+        // `cc-rs` does not recognize tc32 yet. Bootstrap only needs an ARM-like
+        // bare-metal shape here to discover and pass through the configured tools.
+        "arm-none-eabi"
+    } else {
+        &target.triple
+    };
     cfg.cargo_metadata(false)
         .opt_level(2)
         .warnings(false)
         .debug(false)
         // We have to configure out_dir, otherwise flag_if_supported will not work
         .out_dir(build.tempdir().join("cc-rs-out-dir"))
-        .target(&target.triple)
+        .target(cc_target)
         .host(&build.host_target.triple);
 
     match build.config.compress_debuginfo(target) {
