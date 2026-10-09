@@ -1,0 +1,834 @@
+name: Build TC32 Rust Host Toolchain
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "tc32"]
+    paths:
+      - ".github/workflows/build-tc32-host.yml"
+      - "compiler/**"
+      - "library/**"
+      - "src/**"
+      - "x.py"
+  pull_request:
+    paths:
+      - ".github/workflows/build-tc32-host.yml"
+      - "compiler/**"
+      - "library/**"
+      - "src/**"
+      - "x.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tc32-rust-host-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LLVM_REPOSITORY: modern-tc32/llvm-project
+  LLVM_VERSION: "23"
+
+jobs:
+  resolve-llvm-release:
+    name: Resolve LLVM release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve latest LLVM release with Rust artifacts
+        id: resolve
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.LLVM_REPO_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "LLVM_REPO_READ_TOKEN is not set" >&2
+            exit 1
+          fi
+          TAG="$(python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ["LLVM_REPOSITORY"]
+          version = os.environ["LLVM_VERSION"]
+          token = os.environ["TOKEN"]
+          required_assets = {
+              "tc32-llvm-rust-llvm-linux-amd64.tar.gz",
+              "tc32-llvm-rust-llvm-macos-amd64.tar.gz",
+              "tc32-llvm-rust-llvm-macos-arm64.tar.gz",
+              "tc32-llvm-rust-llvm-windows-amd64.zip",
+          }
+          candidates = []
+          page = 1
+
+          while True:
+              url = f"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}"
+              request = urllib.request.Request(url, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urllib.request.urlopen(request) as response:
+                  releases = json.load(response)
+              if not releases:
+                  break
+
+              for release in releases:
+                  tag = release.get("tag_name", "")
+                  asset_names = {asset.get("name") for asset in release.get("assets", [])}
+                  if (
+                      not release.get("draft")
+                      and release.get("published_at")
+                      and tag.startswith(f"{version}.")
+                      and required_assets <= asset_names
+                  ):
+                      candidates.append(release)
+
+              if len(releases) < 100:
+                  break
+              page += 1
+
+          if not candidates:
+              raise SystemExit(
+                  f"No LLVM {version}.x release found in {repository} with all Rust host assets"
+              )
+
+          latest = max(candidates, key=lambda release: release["published_at"])
+          print(latest["tag_name"])
+          PY
+          )"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build-host:
+    needs: resolve-llvm-release
+    name: ${{ matrix.host }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-amd64
+            runs_on: ubuntu-latest
+            host_triple: x86_64-unknown-linux-gnu
+            is_windows: false
+          - host: macos-amd64
+            runs_on: macos-15-intel
+            host_triple: x86_64-apple-darwin
+            is_windows: false
+          - host: macos-arm64
+            runs_on: macos-14
+            host_triple: aarch64-apple-darwin
+            is_windows: false
+          - host: windows-amd64
+            runs_on: windows-latest
+            host_triple: x86_64-pc-windows-msvc
+            is_windows: true
+
+    steps:
+      - name: Checkout Rust
+        uses: actions/checkout@v5
+
+      - name: Enable MSVC environment
+        if: matrix.is_windows
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3 git
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --version >/dev/null
+
+      - name: Show tool versions (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          git --version
+
+      - name: Show tool versions (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          python --version
+          git --version
+
+      - name: Init cargo submodule (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 src/tools/cargo
+
+      - name: Init cargo submodule (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          git submodule update --init --depth 1 src/tools/cargo
+
+      - name: Download LLVM release asset (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.LLVM_REPO_READ_TOKEN }}
+          LLVM_RELEASE_TAG: ${{ needs.resolve-llvm-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p llvm-artifact
+          ASSET="tc32-llvm-rust-llvm-${{ matrix.host }}.tar.gz"
+          URL="https://github.com/$LLVM_REPOSITORY/releases/download/$LLVM_RELEASE_TAG/$ASSET"
+          curl --fail --location --retry 3 \
+            -H "Authorization: Bearer $TOKEN" \
+            "$URL" \
+            -o "llvm-artifact/$ASSET"
+
+      - name: Download LLVM release asset (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.LLVM_REPO_READ_TOKEN }}
+          LLVM_RELEASE_TAG: ${{ needs.resolve-llvm-release.outputs.tag }}
+        run: |
+          $asset = "tc32-llvm-rust-llvm-${{ matrix.host }}.zip"
+          $url = "https://github.com/$env:LLVM_REPOSITORY/releases/download/$env:LLVM_RELEASE_TAG/$asset"
+          $destination = Join-Path $env:GITHUB_WORKSPACE "llvm-artifact/$asset"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+          curl.exe --fail --location --retry 3 `
+            --header "Authorization: Bearer $env:TOKEN" `
+            $url --output $destination
+
+      - name: Unpack LLVM artifact (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/llvm-toolchain"
+          tar -xzf "$GITHUB_WORKSPACE/llvm-artifact/tc32-llvm-rust-llvm-${{ matrix.host }}.tar.gz" \
+            -C "$GITHUB_WORKSPACE/llvm-toolchain"
+
+      - name: Unpack LLVM artifact (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:GITHUB_WORKSPACE "llvm-artifact/tc32-llvm-rust-llvm-${{ matrix.host }}.zip"
+          $dest = Join-Path $env:GITHUB_WORKSPACE "llvm-toolchain"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Expand-Archive -Path $archive -DestinationPath $dest -Force
+
+      - name: Show unpacked LLVM tools (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_BIN="$GITHUB_WORKSPACE/llvm-toolchain/bin"
+          "$LLVM_BIN/llvm-config" --version
+          "$LLVM_BIN/FileCheck" --version
+          "$LLVM_BIN/clang" --version
+          "$LLVM_BIN/llc" --version
+          "$LLVM_BIN/llvm-objdump" --version
+
+      - name: Show unpacked LLVM tools (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $llvmBin = Join-Path $env:GITHUB_WORKSPACE "llvm-toolchain/bin"
+          & (Join-Path $llvmBin "llvm-config.exe") --version
+          & (Join-Path $llvmBin "FileCheck.exe") --version
+          & (Join-Path $llvmBin "clang.exe") --version
+          & (Join-Path $llvmBin "llc.exe") --version
+          & (Join-Path $llvmBin "llvm-objdump.exe") --version
+
+      - name: Write bootstrap.toml (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_BIN="$GITHUB_WORKSPACE/llvm-toolchain/bin"
+          cat > "$GITHUB_WORKSPACE/bootstrap.toml" <<EOF
+          change-id = "ignore"
+
+          [llvm]
+          download-ci-llvm = false
+
+          [build]
+          build = "${{ matrix.host_triple }}"
+          host = ["${{ matrix.host_triple }}"]
+          target = ["${{ matrix.host_triple }}", "tc32-unknown-none-elf"]
+
+          [rust]
+          download-rustc = false
+          llvm-tools = false
+
+          [target.${{ matrix.host_triple }}]
+          llvm-config = "$LLVM_BIN/llvm-config"
+          llvm-filecheck = "$LLVM_BIN/FileCheck"
+          llvm-has-rust-patches = false
+          EOF
+
+      - name: Write bootstrap.toml (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $llvmBin = (Join-Path $env:GITHUB_WORKSPACE "llvm-toolchain/bin") -replace '\\','/'
+          $content = @"
+          change-id = "ignore"
+
+          [llvm]
+          download-ci-llvm = false
+
+          [build]
+          build = "${{ matrix.host_triple }}"
+          host = ["${{ matrix.host_triple }}"]
+          target = ["${{ matrix.host_triple }}", "tc32-unknown-none-elf"]
+
+          [rust]
+          download-rustc = false
+          llvm-tools = false
+
+          [target.${{ matrix.host_triple }}]
+          llvm-config = "$llvmBin/llvm-config.exe"
+          llvm-filecheck = "$llvmBin/FileCheck.exe"
+          llvm-has-rust-patches = false
+          "@
+          Set-Content -Path (Join-Path $env:GITHUB_WORKSPACE "bootstrap.toml") -Value $content
+
+      - name: Build stage2 Rust host toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 x.py build --stage 2 compiler/rustc src/tools/cargo library/std --target tc32-unknown-none-elf
+
+      - name: Build stage2 Rust host toolchain (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          python x.py build --stage 2 compiler/rustc src/tools/cargo library/std --target tc32-unknown-none-elf
+
+      - name: Verify stage2 rustc (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE2="$GITHUB_WORKSPACE/build/${{ matrix.host_triple }}/stage2/bin/rustc"
+          "$STAGE2" --version
+          "$STAGE2" --print target-list | grep -Fx tc32-unknown-none-elf
+          "$STAGE2" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
+
+      - name: Verify stage2 rustc (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $stage2 = Join-Path $env:GITHUB_WORKSPACE "build/${{ matrix.host_triple }}/stage2/bin/rustc.exe"
+          & $stage2 --version
+          $targets = & $stage2 --print target-list
+          if (-not ($targets | Select-String -Pattern '^tc32-unknown-none-elf$')) {
+            throw "tc32-unknown-none-elf target is missing"
+          }
+          $cfg = & $stage2 --print cfg --target tc32-unknown-none-elf
+          if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
+            throw "tc32 target_arch cfg is missing"
+          }
+
+      - name: Package standalone toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST_TRIPLE="${{ matrix.host_triple }}"
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage2-$HOST_TRIPLE"
+          SNAPSHOT_RUSTC="$(rustup which rustc)"
+          SNAPSHOT_SYSROOT="$("$SNAPSHOT_RUSTC" --print sysroot)"
+          HOST_TRIPLE="$HOST_TRIPLE" \
+          RUST_BUILD_DIR="$GITHUB_WORKSPACE/build" \
+          LLVM_TOOLCHAIN_DIR="$GITHUB_WORKSPACE/llvm-toolchain" \
+          TOOLCHAIN_OUTPUT_DIR="$GITHUB_WORKSPACE" \
+          RUST_SOURCE_DIR="$GITHUB_WORKSPACE" \
+          BOOTSTRAP_RUSTC="$GITHUB_WORKSPACE/build/bootstrap/debug/rustc" \
+          SNAPSHOT_RUSTC="$SNAPSHOT_RUSTC" \
+          SNAPSHOT_SYSROOT="$SNAPSHOT_SYSROOT" \
+          src/ci/scripts/package-stage2-tc32-toolchain.sh
+          tar -czf "$GITHUB_WORKSPACE/tc32-rust-toolchain-${{ matrix.host }}.tar.gz" \
+            -C "$GITHUB_WORKSPACE" "$(basename "$TOOLCHAIN_DIR")"
+
+      - name: Verify packaged standalone toolchain (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/tc32-stage2-${{ matrix.host_triple }}"
+          test -d "$TOOLCHAIN_DIR/lib/rustlib/tc32-unknown-none-elf/lib"
+          test -x "$TOOLCHAIN_DIR/lib/rustlib/${{ matrix.host_triple }}/bin/rust-objcopy"
+          test ! -L "$TOOLCHAIN_DIR/lib/rustlib/src/rust"
+          test ! -L "$TOOLCHAIN_DIR/lib/rustlib/rustc-src/rust"
+          "$TOOLCHAIN_DIR/bin/rustc" -vV >/dev/null
+          "$TOOLCHAIN_DIR/bin/cargo" -V >/dev/null
+          "$TOOLCHAIN_DIR/bin/rustc" --print target-list | grep -Fx tc32-unknown-none-elf
+          "$TOOLCHAIN_DIR/bin/rustc" --print cfg --target tc32-unknown-none-elf | grep -Fx 'target_arch="tc32"'
+
+      - name: Inspect standalone toolchain inputs (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $hostTriple = "${{ matrix.host_triple }}"
+          $stage2Lib = Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage2/lib"
+          $snapshotRustc = (rustup which rustc).Trim()
+          $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
+          $snapshotLib = Join-Path $snapshotSysroot "lib"
+          $reportDir = Join-Path $env:GITHUB_WORKSPACE "windows-packaging-report"
+          Remove-Item -Recurse -Force $reportDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+
+          function Show-TreeStats([string]$label, [string]$root, [string]$prefix) {
+            Write-Host "##[group]$label"
+            Write-Host "Root: $root"
+            if (-not (Test-Path $root)) {
+              Write-Host "Missing"
+              "Missing: $root" | Set-Content -Path (Join-Path $reportDir "$prefix-summary.txt")
+              Write-Host "##[endgroup]"
+              return
+            }
+
+            $files = Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue
+            $dirs = Get-ChildItem -LiteralPath $root -Recurse -Force -Directory -ErrorAction SilentlyContinue
+            $reparse = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
+
+            $fileCount = @($files).Count
+            $dirCount = @($dirs).Count
+            $reparseCount = @($reparse).Count
+            $totalBytes = ($files | Measure-Object -Property Length -Sum).Sum
+            if ($null -eq $totalBytes) { $totalBytes = 0 }
+            $totalGiB = [Math]::Round($totalBytes / 1GB, 3)
+
+            @(
+              "Root: $root"
+              "Files: $fileCount"
+              "Directories: $dirCount"
+              "Reparse points: $reparseCount"
+              "Size bytes: $totalBytes"
+              "Size GiB: $totalGiB"
+            ) | Set-Content -Path (Join-Path $reportDir "$prefix-summary.txt")
+
+            Write-Host "Files: $fileCount"
+            Write-Host "Directories: $dirCount"
+            Write-Host "Reparse points: $reparseCount"
+            Write-Host "Size bytes: $totalBytes"
+            Write-Host "Size GiB: $totalGiB"
+
+            if ($reparseCount -gt 0) {
+              Write-Host "Reparse points:"
+              $reparseData = $reparse |
+                Select-Object FullName, LinkType, Attributes, Target
+              $reparseData |
+                Format-Table -AutoSize | Out-String -Width 4096 |
+                Write-Host
+              $reparseData | Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-reparse-points.csv")
+            }
+
+            Write-Host "Largest files:"
+            $largestFiles = $files |
+              Sort-Object Length -Descending
+            $largestFiles |
+              Select-Object -First 20 FullName, Length |
+              Format-Table -AutoSize | Out-String -Width 4096 |
+              Write-Host
+            $largestFiles | Select-Object FullName, Length |
+              Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-files-by-size.csv")
+
+            $dirSizes = @{}
+            foreach ($file in $files) {
+              $dir = Split-Path -Parent $file.FullName
+              if (-not $dirSizes.ContainsKey($dir)) {
+                $dirSizes[$dir] = [int64]0
+              }
+              $dirSizes[$dir] += $file.Length
+            }
+            $dirSizes.GetEnumerator() |
+              Sort-Object Value -Descending |
+              ForEach-Object {
+                [pscustomobject]@{
+                  FullName = $_.Key
+                  Length = $_.Value
+                }
+              } |
+              Export-Csv -NoTypeInformation -Path (Join-Path $reportDir "$prefix-directories-by-size.csv")
+
+            Write-Host "##[endgroup]"
+          }
+
+          Show-TreeStats "stage2 lib" $stage2Lib "stage2-lib"
+          Show-TreeStats "snapshot lib" $snapshotLib "snapshot-lib"
+
+          @(
+            "hostTriple=$hostTriple"
+            "stage2Lib=$stage2Lib"
+            "snapshotLib=$snapshotLib"
+          ) | Set-Content -Path (Join-Path $reportDir "paths.txt")
+
+      - name: Package standalone toolchain (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $hostTriple = "${{ matrix.host_triple }}"
+          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage2-$hostTriple"
+          $snapshotRustc = (rustup which rustc).Trim()
+          $snapshotSysroot = (& $snapshotRustc --print sysroot).Trim()
+          function Invoke-TimedBlock([string]$label, [scriptblock]$block) {
+            $started = Get-Date
+            Write-Host "[$($started.ToString('s'))] START $label"
+            & $block
+            $elapsed = ((Get-Date) - $started).TotalSeconds
+            Write-Host "[$((Get-Date).ToString('s'))] END $label (${elapsed}s)"
+          }
+          function Copy-FilteredTree([string]$label, [string]$sourceDir, [string]$destDir) {
+            $sourceDir = (Resolve-Path $sourceDir).Path
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            $entries = Get-ChildItem -LiteralPath $sourceDir -Recurse -Force -ErrorAction Stop
+            $copiedCount = 0
+            foreach ($entry in $entries) {
+              $relativePath = $entry.FullName.Substring($sourceDir.Length).TrimStart('\')
+              if (-not $relativePath) {
+                continue
+              }
+              $skipKnown = $sourceDir -like '*\stage2\lib' -and (
+                $relativePath -eq 'rustlib\src' -or
+                $relativePath -like 'rustlib\src\*' -or
+                $relativePath -eq 'rustlib\rustc-src' -or
+                $relativePath -like 'rustlib\rustc-src\*'
+              )
+              if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                Write-Host "SKIP reparse point: $($entry.FullName)"
+                continue
+              }
+              if ($skipKnown) {
+                Write-Host "SKIP excluded path: $($entry.FullName)"
+                continue
+              }
+              $targetPath = Join-Path $destDir $relativePath
+              if ($entry.PSIsContainer) {
+                New-Item -ItemType Directory -Force -Path $targetPath | Out-Null
+              } else {
+                $parent = Split-Path -Parent $targetPath
+                if ($parent) {
+                  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+                }
+                Copy-Item -LiteralPath $entry.FullName -Destination $targetPath -Force
+              }
+              $copiedCount += 1
+            }
+            Write-Host "${label} copied entries: $copiedCount"
+          }
+          function Show-ReparsePoints([string]$rootDir) {
+            if (-not (Test-Path $rootDir)) {
+              return
+            }
+            $points = Get-ChildItem -LiteralPath $rootDir -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }
+            if (@($points).Count -eq 0) {
+              Write-Host "No reparse points under ${rootDir}"
+              return
+            }
+            Write-Host "Reparse points under ${rootDir}:"
+            $points |
+              Select-Object FullName, LinkType, Attributes, Target |
+              Format-Table -AutoSize | Out-String -Width 4096 |
+              Write-Host
+          }
+          function Materialize-RustSource([string]$repoDir, [string]$destDir) {
+            Remove-Item -Recurse -Force $destDir -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            $archivePath = Join-Path $env:RUNNER_TEMP ("rust-src-" + [guid]::NewGuid().ToString() + ".tar")
+            try {
+              git -C $repoDir archive --format=tar HEAD -o $archivePath
+              tar -xf $archivePath -C $destDir
+            } finally {
+              Remove-Item -Force $archivePath -ErrorAction SilentlyContinue
+            }
+          }
+          function Copy-RustObjcopy([string]$hostTriple, [string]$toolchainDir) {
+            $candidatePaths = @(
+              (Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage2/lib/rustlib/$hostTriple/bin/rust-objcopy.exe"),
+              (Join-Path $env:GITHUB_WORKSPACE "build/$hostTriple/stage0/lib/rustlib/$hostTriple/bin/rust-objcopy.exe")
+            )
+            $targetDir = Join-Path $toolchainDir "lib/rustlib/$hostTriple/bin"
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            foreach ($candidate in $candidatePaths) {
+              if (Test-Path $candidate) {
+                Copy-Item $candidate (Join-Path $targetDir "rust-objcopy.exe") -Force
+                return
+              }
+            }
+            throw "Missing rust-objcopy.exe in stage2/stage0 rustlib bin"
+          }
+          Remove-Item -Recurse -Force $toolchainDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $toolchainDir "bin"), `
+            (Join-Path $toolchainDir "lib"), `
+            (Join-Path $toolchainDir "llvm/bin"), `
+            (Join-Path $toolchainDir "llvm/lib"), `
+            (Join-Path $toolchainDir "snapshot/bin"), `
+            (Join-Path $toolchainDir "snapshot/lib") | Out-Null
+
+          Invoke-TimedBlock "copy bootstrap rustc" {
+            Copy-Item "build/bootstrap/debug/rustc.exe" (Join-Path $toolchainDir "bin/rustc-bootstrap.exe")
+          }
+          Invoke-TimedBlock "copy stage2 rustc" {
+            Copy-Item "build/$hostTriple/stage2/bin/rustc.exe" (Join-Path $toolchainDir "bin/rustc-real.exe")
+          }
+          Invoke-TimedBlock "copy stage2 cargo" {
+            Copy-Item "build/$hostTriple/stage2-tools-bin/cargo.exe" (Join-Path $toolchainDir "bin/cargo-real.exe")
+          }
+          Invoke-TimedBlock "copy snapshot rustc" {
+            Copy-Item $snapshotRustc (Join-Path $toolchainDir "snapshot/bin/rustc.exe")
+          }
+          Show-ReparsePoints "build/$hostTriple/stage2/lib"
+          Invoke-TimedBlock "copy stage2 lib" {
+            Copy-FilteredTree "stage2 lib" "build/$hostTriple/stage2/lib" (Join-Path $toolchainDir "lib")
+          }
+          Invoke-TimedBlock "copy rust-objcopy" {
+            Copy-RustObjcopy $hostTriple $toolchainDir
+          }
+          Invoke-TimedBlock "materialize rust sources" {
+            Materialize-RustSource $env:GITHUB_WORKSPACE (Join-Path $toolchainDir "lib/rustlib/src/rust")
+            Materialize-RustSource $env:GITHUB_WORKSPACE (Join-Path $toolchainDir "lib/rustlib/rustc-src/rust")
+          }
+          Invoke-TimedBlock "copy snapshot lib" {
+            Copy-FilteredTree "snapshot lib" (Join-Path $snapshotSysroot "lib") (Join-Path $toolchainDir "snapshot/lib")
+          }
+          Invoke-TimedBlock "copy llvm bin" {
+            $llvmBin = Join-Path $env:GITHUB_WORKSPACE "llvm-toolchain/bin"
+            $entries = Get-ChildItem -LiteralPath $llvmBin -Force
+            Write-Host "llvm bin top-level entries: $(@($entries).Count)"
+            foreach ($entry in $entries) {
+              Write-Host "COPY $($entry.FullName)"
+              Copy-Item -LiteralPath $entry.FullName -Destination (Join-Path $toolchainDir "llvm/bin") -Recurse -Force
+            }
+          }
+          if (Test-Path "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang") {
+            Invoke-TimedBlock "copy llvm clang resources" {
+              Copy-Item "$env:GITHUB_WORKSPACE/llvm-toolchain/lib/clang" (Join-Path $toolchainDir "llvm/lib") -Recurse -Force
+            }
+          }
+
+          $toolchainToml = @"
+          host_triple = "$hostTriple"
+          target_triple = "tc32-unknown-none-elf"
+          channel = "stage2-local"
+
+          [paths]
+          cargo = "bin/cargo.cmd"
+          rustc = "bin/rustc.cmd"
+          real_rustc = "bin/rustc-real.exe"
+          bootstrap_rustc = "bin/rustc-bootstrap.exe"
+          snapshot_rustc = "snapshot/bin/rustc.exe"
+          sysroot = "."
+          llvm_bin = "llvm/bin"
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "toolchain.toml") -Value $toolchainToml
+
+          $rustcCmd = @"
+          @echo off
+          setlocal
+          set "ROOT=%~dp0.."
+          set "HAVE_SYSROOT=0"
+          :scan
+          if "%~1"=="" goto scanned
+          if "%~1"=="--sysroot" (
+            set "HAVE_SYSROOT=1"
+            goto scanned
+          )
+          set "ARG1=%~1"
+          if /I "%ARG1:~0,10%"=="--sysroot=" (
+            set "HAVE_SYSROOT=1"
+            goto scanned
+          )
+          shift
+          goto scan
+          :scanned
+          set "PATH=%ROOT%\lib;%PATH%"
+          if "%HAVE_SYSROOT%"=="1" goto run
+          "%ROOT%\bin\rustc-real.exe" %* --sysroot "%ROOT%"
+          exit /b %ERRORLEVEL%
+          :run
+          "%ROOT%\bin\rustc-real.exe" %*
+          exit /b %ERRORLEVEL%
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "bin/rustc.cmd") -Value $rustcCmd
+
+          $cargoCmd = @"
+          @echo off
+          setlocal
+          set "ROOT=%~dp0.."
+          if not defined RUSTC set "RUSTC=%ROOT%\bin\rustc.cmd"
+          if not defined TC32_LLVM_BIN set "TC32_LLVM_BIN=%ROOT%\llvm\bin"
+          if not defined CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER set "CARGO_TARGET_TC32_UNKNOWN_NONE_ELF_LINKER=%ROOT%\llvm\bin\ld.lld.exe"
+          "%ROOT%\bin\cargo-real.exe" %*
+          "@
+          Set-Content -Path (Join-Path $toolchainDir "bin/cargo.cmd") -Value $cargoCmd
+
+      - name: Verify packaged standalone toolchain (Windows)
+        if: ${{ false }} # TEMP: disabled while investigating packaged rustc wrapper behavior on Windows
+        shell: pwsh
+        run: |
+          $toolchainDir = Join-Path $env:GITHUB_WORKSPACE "tc32-stage2-${{ matrix.host_triple }}"
+          if (-not (Test-Path (Join-Path $toolchainDir "lib/rustlib/tc32-unknown-none-elf/lib"))) {
+            throw "Missing tc32 target sysroot in packaged toolchain"
+          }
+          if (-not (Test-Path (Join-Path $toolchainDir "lib/rustlib/${{ matrix.host_triple }}/bin/rust-objcopy.exe"))) {
+            throw "Missing rust-objcopy in packaged toolchain"
+          }
+          foreach ($path in @(
+            (Join-Path $toolchainDir "lib/rustlib/src/rust"),
+            (Join-Path $toolchainDir "lib/rustlib/rustc-src/rust")
+          )) {
+            $item = Get-Item -LiteralPath $path -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              throw "Unexpected reparse point in packaged rust sources: $path"
+            }
+          }
+          & (Join-Path $toolchainDir "bin/rustc.cmd") -vV | Out-Null
+          & (Join-Path $toolchainDir "bin/cargo.cmd") -V | Out-Null
+          $targets = & (Join-Path $toolchainDir "bin/rustc.cmd") --print target-list
+          if (-not ($targets | Select-String -Pattern '^tc32-unknown-none-elf$')) {
+            throw "Packaged toolchain rustc does not report tc32 target in target-list"
+          }
+          $cfg = & (Join-Path $toolchainDir "bin/rustc.cmd") --print cfg --target tc32-unknown-none-elf
+          if (-not ($cfg | Select-String -Pattern '^target_arch="tc32"$')) {
+            throw "Packaged toolchain rustc does not report tc32 target cfg"
+          }
+
+      - name: Upload standalone toolchain artifact (Unix)
+        if: ${{ !matrix.is_windows }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: tc32-rust-toolchain-${{ matrix.host }}
+          if-no-files-found: error
+          path: |
+            tc32-rust-toolchain-${{ matrix.host }}.tar.gz
+            tc32-rust-toolchain-${{ matrix.host }}.zip
+
+      - name: Upload standalone toolchain artifact (Windows)
+        if: matrix.is_windows
+        uses: actions/upload-artifact@v7
+        with:
+          name: tc32-rust-toolchain-${{ matrix.host }}
+          if-no-files-found: error
+          compression-level: 0
+          path: tc32-stage2-${{ matrix.host_triple }}
+
+      - name: Upload packaging report artifact (Windows)
+        if: matrix.is_windows
+        uses: actions/upload-artifact@v7
+        with:
+          name: tc32-windows-packaging-report-${{ matrix.host }}
+          if-no-files-found: error
+          path: windows-packaging-report
+
+  publish-prerelease:
+    needs:
+      - resolve-llvm-release
+      - build-host
+    if: github.event_name != 'pull_request'
+    name: Publish prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Rust version
+        uses: actions/checkout@v5
+
+      - name: Compute release metadata
+        id: release-metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < src/version)"
+          SHA6="${GITHUB_SHA:0:6}"
+          RELEASE_DATE="$(date -u +%Y-%m-%d)"
+          RELEASE_DATE_COMPACT="${RELEASE_DATE//-/}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha6=$SHA6" >> "$GITHUB_OUTPUT"
+          echo "date=$RELEASE_DATE" >> "$GITHUB_OUTPUT"
+          echo "tag=tc32-$VERSION-$RELEASE_DATE_COMPACT-$SHA6" >> "$GITHUB_OUTPUT"
+
+      - name: Download Linux standalone toolchain artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tc32-rust-toolchain-linux-amd64
+          path: release-artifacts
+
+      - name: Download macOS standalone toolchain artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tc32-rust-toolchain-macos-arm64
+          path: release-artifacts
+
+      - name: Download macOS amd64 standalone toolchain artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tc32-rust-toolchain-macos-amd64
+          path: release-artifacts
+
+      - name: Download Windows standalone toolchain artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tc32-rust-toolchain-windows-amd64
+          path: release-artifacts/tc32-stage2-x86_64-pc-windows-msvc
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Rust TC32 ${{ steps.release-metadata.outputs.version }} (${{ steps.release-metadata.outputs.sha6 }}) ${{ steps.release-metadata.outputs.date }}
+
+          Source commit: \`${{ github.sha }}\`
+          Rust version: \`${{ steps.release-metadata.outputs.version }}\`
+          Release date (UTC): \`${{ steps.release-metadata.outputs.date }}\`
+          Rust workflow run: \`${{ github.run_id }}\`
+          LLVM release: \`${{ needs.resolve-llvm-release.outputs.tag }}\`
+
+          Included host artifacts:
+          - linux-amd64
+          - macos-amd64
+          - macos-arm64
+          - windows-amd64
+          EOF
+
+      - name: Package Windows standalone toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          WINDOWS_DIR="$GITHUB_WORKSPACE/release-artifacts/tc32-stage2-x86_64-pc-windows-msvc"
+          if [ -d "$WINDOWS_DIR" ]; then
+            (
+              cd "$GITHUB_WORKSPACE/release-artifacts"
+              zip -qr tc32-rust-toolchain-windows-amd64.zip "$(basename "$WINDOWS_DIR")"
+            )
+            rm -rf "$WINDOWS_DIR"
+          else
+            echo "missing expected Windows toolchain directory: $WINDOWS_DIR" >&2
+            exit 1
+          fi
+
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release-metadata.outputs.tag }}
+          name: Rust TC32 ${{ steps.release-metadata.outputs.version }} (${{ steps.release-metadata.outputs.sha6 }}) ${{ steps.release-metadata.outputs.date }}
+          prerelease: true
+          generate_release_notes: false
+          body_path: release-notes.md
+          files: release-artifacts/*
